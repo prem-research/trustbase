@@ -1,0 +1,12 @@
+version = "0.1.0"
+algorithm = "sha384"
+
+[data]
+id = "example-model"
+# Demonstrates an extra measured payload. Real models need approved mount metadata.
+"workload.json" = '{"kind":"model","example":true}'
+"policy.rego" = '''
+package agent_policy
+default CreateContainerRequest := false
+default ExecProcessRequest := false
+'''

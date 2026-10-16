@@ -1,0 +1,12 @@
+schema_version: 1
+profiles:
+  - id: model-router
+    initdata: init-data/model-router/init-data.toml
+    podvm:
+      profile: 2vcpu-8g
+      version: ">=0.1.6 <0.2.0"
+  - id: example-model
+    initdata: init-data/example-model/init-data.toml
+    podvm:
+      profile: 2vcpu-8g
+      version: "^0.1.6"
