@@ -1,8 +1,85 @@
 {
   "$defs": {
+    "artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "const": "application/zstd"
+        },
+        "name": {
+          "pattern": "^podvm-(nvidia-)?ubuntu-24\\.04-x86_64-[A-Za-z0-9._-]+\\.tar\\.zst$",
+          "type": "string"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "required": [
+        "name",
+        "sha256",
+        "media_type"
+      ],
+      "type": "object"
+    },
+    "cpuArtifact": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "name": {
+          "pattern": "^podvm-ubuntu-"
+        }
+      }
+    },
+    "gpu": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "enum": [
+            1,
+            8
+          ]
+        },
+        "family": {
+          "enum": [
+            "H100",
+            "H200",
+            "B200",
+            "B300"
+          ]
+        },
+        "nvswitch_count": {
+          "enum": [
+            0,
+            4
+          ]
+        },
+        "platform": {
+          "enum": [
+            "pcie",
+            "pcie-nvlink",
+            "hgx-hopper",
+            "hgx-blackwell"
+          ]
+        }
+      },
+      "required": [
+        "family",
+        "platform",
+        "count",
+        "nvswitch_count"
+      ],
+      "type": "object"
+    },
     "memory": {
       "pattern": "^[1-9][0-9]*[MG]$",
       "type": "string"
+    },
+    "nvidiaArtifact": {
+      "$ref": "#/$defs/artifact",
+      "properties": {
+        "name": {
+          "pattern": "^podvm-nvidia-ubuntu-"
+        }
+      }
     },
     "profileId": {
       "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
@@ -17,6 +94,10 @@
         "$ref": "#/$defs/vcpuType"
       },
       "type": "object"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
     },
     "sha384": {
       "pattern": "^[0-9a-f]{96}$",
@@ -445,69 +526,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "configuration": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "acpi_distribution": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "cmdline": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "cpus": {
-                          "maximum": 255,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "disk": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "firmware": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "initrd": {
-                          "type": "null"
-                        },
-                        "kernel": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "measurement_note": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "memory": {
-                          "$ref": "#/$defs/memory"
-                        },
-                        "mode": {
-                          "const": "direct"
-                        },
-                        "qemu": {
-                          "$ref": "#/$defs/tdxQemu"
-                        },
-                        "qemu_source_version": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "cpus",
-                        "memory",
-                        "acpi_distribution",
-                        "qemu_source_version",
-                        "mode",
-                        "firmware",
-                        "kernel",
-                        "initrd",
-                        "cmdline",
-                        "disk",
-                        "qemu",
-                        "measurement_note"
-                      ],
-                      "type": "object"
+                      "$ref": "#/$defs/tdxRecord/properties/configuration"
                     },
                     "measurements": {
                       "additionalProperties": false,
@@ -538,26 +557,7 @@
                       "type": "object"
                     },
                     "podvm_artifact": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "media_type": {
-                          "const": "application/zstd"
-                        },
-                        "name": {
-                          "pattern": "^podvm-(nvidia-)?ubuntu-24\\.04-x86_64-.+\\.tar\\.zst$",
-                          "type": "string"
-                        },
-                        "sha256": {
-                          "pattern": "^[0-9a-f]{64}$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "name",
-                        "sha256",
-                        "media_type"
-                      ],
-                      "type": "object"
+                      "$ref": "#/$defs/cpuArtifact"
                     },
                     "podvm_measurements_sha256": {
                       "pattern": "^[0-9a-f]{64}$",
@@ -570,6 +570,9 @@
                     "podvm_source_revision": {
                       "pattern": "^[0-9a-f]{40}$",
                       "type": "string"
+                    },
+                    "podvm_variant": {
+                      "const": "cpu"
                     },
                     "podvm_version": {
                       "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\+[0-9A-Za-z.-]+)?$",
@@ -587,7 +590,8 @@
                     "podvm_artifact",
                     "tee",
                     "configuration",
-                    "measurements"
+                    "measurements",
+                    "podvm_variant"
                   ],
                   "type": "object"
                 },
@@ -595,67 +599,7 @@
                   "additionalProperties": false,
                   "properties": {
                     "configuration": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "cmdline": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "cpus": {
-                          "maximum": 255,
-                          "minimum": 1,
-                          "type": "integer"
-                        },
-                        "disk": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "firmware": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "guest_features": {
-                          "pattern": "^0x[0-9a-f]+$",
-                          "type": "string"
-                        },
-                        "initrd": {
-                          "type": "null"
-                        },
-                        "kernel": {
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "memory": {
-                          "$ref": "#/$defs/memory"
-                        },
-                        "mode": {
-                          "const": "direct"
-                        },
-                        "qemu": {
-                          "$ref": "#/$defs/snpQemu"
-                        },
-                        "vcpu_type": {
-                          "$ref": "#/$defs/vcpuType"
-                        },
-                        "vmm_type": {
-                          "const": "QEMU"
-                        }
-                      },
-                      "required": [
-                        "cpus",
-                        "memory",
-                        "vcpu_type",
-                        "vmm_type",
-                        "guest_features",
-                        "mode",
-                        "firmware",
-                        "kernel",
-                        "initrd",
-                        "cmdline",
-                        "disk",
-                        "qemu"
-                      ],
-                      "type": "object"
+                      "$ref": "#/$defs/snpRecord/properties/configuration"
                     },
                     "cpu_model": {
                       "minLength": 1,
@@ -679,26 +623,7 @@
                       "type": "object"
                     },
                     "podvm_artifact": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "media_type": {
-                          "const": "application/zstd"
-                        },
-                        "name": {
-                          "pattern": "^podvm-(nvidia-)?ubuntu-24\\.04-x86_64-.+\\.tar\\.zst$",
-                          "type": "string"
-                        },
-                        "sha256": {
-                          "pattern": "^[0-9a-f]{64}$",
-                          "type": "string"
-                        }
-                      },
-                      "required": [
-                        "name",
-                        "sha256",
-                        "media_type"
-                      ],
-                      "type": "object"
+                      "$ref": "#/$defs/cpuArtifact"
                     },
                     "podvm_measurements_sha256": {
                       "pattern": "^[0-9a-f]{64}$",
@@ -711,6 +636,9 @@
                     "podvm_source_revision": {
                       "pattern": "^[0-9a-f]{40}$",
                       "type": "string"
+                    },
+                    "podvm_variant": {
+                      "const": "cpu"
                     },
                     "podvm_version": {
                       "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\+[0-9A-Za-z.-]+)?$",
@@ -729,7 +657,79 @@
                     "tee",
                     "cpu_model",
                     "configuration",
-                    "measurements"
+                    "measurements",
+                    "podvm_variant"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "configuration": {
+                      "$ref": "#/$defs/snpRecord/properties/configuration"
+                    },
+                    "cpu_model": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "gpu": {
+                      "$ref": "#/$defs/gpu"
+                    },
+                    "measurements": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "host_data": {
+                          "pattern": "^[0-9a-f]{64}$",
+                          "type": "string"
+                        },
+                        "measurement": {
+                          "$ref": "#/$defs/sha384"
+                        }
+                      },
+                      "required": [
+                        "measurement",
+                        "host_data"
+                      ],
+                      "type": "object"
+                    },
+                    "podvm_artifact": {
+                      "$ref": "#/$defs/nvidiaArtifact"
+                    },
+                    "podvm_measurements_sha256": {
+                      "pattern": "^[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "podvm_profile": {
+                      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+                      "type": "string"
+                    },
+                    "podvm_source_revision": {
+                      "pattern": "^[0-9a-f]{40}$",
+                      "type": "string"
+                    },
+                    "podvm_variant": {
+                      "const": "nvidia"
+                    },
+                    "podvm_version": {
+                      "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\+[0-9A-Za-z.-]+)?$",
+                      "type": "string"
+                    },
+                    "tee": {
+                      "const": "snp"
+                    }
+                  },
+                  "required": [
+                    "podvm_version",
+                    "podvm_profile",
+                    "podvm_source_revision",
+                    "podvm_measurements_sha256",
+                    "podvm_artifact",
+                    "tee",
+                    "cpu_model",
+                    "configuration",
+                    "measurements",
+                    "podvm_variant",
+                    "gpu"
                   ],
                   "type": "object"
                 }

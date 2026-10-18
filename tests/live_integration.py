@@ -1,4 +1,5 @@
-"""Read-only integration against the published PodVM v0.1.6 release."""
+"""Read-only CPU/NVIDIA integration against one published stable PodVM release."""
+import argparse
 from pathlib import Path
 import shutil
 import sys
@@ -9,24 +10,47 @@ import trustbase as t
 
 
 def main():
+    cli = argparse.ArgumentParser(description=__doc__)
+    cli.add_argument("--podvm-version", default="0.3.13")
+    args = cli.parse_args()
+    version = t.stable_version(args.podvm_version)
+    t.require(version is not None, "integration requires an exact stable PodVM version")
     with tempfile.TemporaryDirectory(prefix="trustbase-live-") as temporary:
         base = Path(temporary)
         authoring = base / "authoring"
         shutil.copytree(t.ROOT / "examples", authoring)
         manifest = t.validate(authoring)
         for profile in manifest["profiles"]:
-            profile["podvm"]["version"] = "0.1.6"
+            profile["podvm"]["version"] = str(version)
         (authoring / "measurements.yaml").write_bytes(t.json_bytes(manifest))
         inputs, dist = base / "inputs", base / "dist"
         lock = t.resolve(authoring, inputs)
-        assert set(lock["releases"]) == {"v0.1.6"}
+        assert len(lock["releases"]) == 1
+        tag = next(iter(lock["releases"]))
+        assert t.stable_version(tag) == version
+        upstream = t.load_json((inputs / "podvm" / tag / "measurements.json").read_bytes())
         release = t.release_metadata("v0.0.0-integration", "prem-research/trustbase", "0" * 40)
         t.package(inputs, dist, release, require_workloads=True)
         result = t.verify_package(dist, require_workloads=True)
         assert len(result["workloads"]) == 2
-        assert all(len(w["references"]) == 5 for w in result["workloads"].values())
-        print("Live integration passed: two workloads, one attested PodVM release, "
-              "ten complete reference records, reproducible package.")
+        variants = set()
+        count = 0
+        for workload in result["workloads"].values():
+            selected = upstream["profiles"][workload["podvm"]["profile"]]
+            variant = t.podvm_variant(selected)
+            variants.add(variant)
+            records = workload["references"]
+            assert len(records) == len(selected["sev"]) + ("tdx" in selected)
+            for record in records:
+                assert record["podvm_variant"] == variant
+                assert record["podvm_artifact"] == upstream["artifacts"][variant]
+                if variant == "nvidia":
+                    assert record["gpu"] == selected["gpu"]
+                    assert record["tee"] == "snp"
+            count += len(records)
+        assert variants == {"cpu", "nvidia"}
+        print(f"Live integration passed: PodVM {tag}, CPU + NVIDIA, "
+              f"{count} complete reference records, verified attestations, reproducible package.")
 
 
 if __name__ == "__main__":

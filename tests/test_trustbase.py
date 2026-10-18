@@ -16,31 +16,21 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import trustbase as t
 
-FIXTURE = Path(__file__).parent / "fixtures" / "podvm-v0.1.6.json"
-REVISION = "b57d5e92583388169743bc0084673f0249d64a34"
+FIXTURE = Path(__file__).parent / "fixtures" / "podvm-v0.3.13.json"
+REVISION = "98fb81edf7284bc44f503ce21347f440acb0e3a6"
+LEGACY_REVISION = "b57d5e92583388169743bc0084673f0249d64a34"
 RELEASE = t.release_metadata("v1.0.0", "prem-research/trustbase", "a" * 40)
 
 
-def upstream(tag="v0.1.6"):
-    doc = t.load_json(FIXTURE.read_bytes())
+def upstream(tag="v0.3.13"):
+    legacy = t.stable_version(tag) < t.Version("0.3.9")
+    path = FIXTURE.with_name("podvm-v0.1.6.json") if legacy else FIXTURE
+    doc = t.load_json(path.read_bytes())
     doc["release"]["version"] = tag
-    doc["artifact"]["name"] = f"podvm-ubuntu-24.04-x86_64-{tag}.tar.zst"
-    if t.stable_version(tag) < t.Version("0.3.9"):
-        return doc
-    # Per-variant format (v0.3.9+), derived from the public fixture: a CPU bundle plus
-    # an NVIDIA bundle whose GPU profile publishes SNP measurements only.
-    cpu = doc.pop("artifact")
-    nvidia = {**cpu, "name": f"podvm-nvidia-ubuntu-24.04-x86_64-{tag}.tar.zst", "sha256": "e" * 64}
-    inputs = {**doc["inputs"], "launch_profiles_sha256": "d" * 64}
-    doc["artifacts"] = {"cpu": cpu, "nvidia": nvidia}
-    doc["inputs"] = {"cpu": inputs, "nvidia": copy.deepcopy(inputs)}
-    sev = copy.deepcopy(doc["profiles"]["2vcpu-8g"]["sev"])
-    for entry in sev.values():
-        entry["configuration"].update(cpus=8, memory="96G")
-    doc["profiles"]["h100-pcie-1-96g"] = {
-        "gpu": {"family": "H100", "platform": "pcie", "count": 1, "nvswitch_count": 0},
-        "sev": sev,
-    }
+    for variant, values in t.podvm_variants(doc).items():
+        artifact = values["artifact"]
+        prefix = "podvm-nvidia-ubuntu" if variant == "nvidia" else "podvm-ubuntu"
+        artifact["name"] = f"{prefix}-24.04-x86_64-{tag}.tar.zst"
     return doc
 
 
@@ -54,7 +44,7 @@ def release(tag, draft=False, prerelease=False):
 
 
 class FakeGitHub:
-    def __init__(self, tags=("v0.1.6", "v0.1.10")):
+    def __init__(self, tags=("v0.3.13", "v0.3.14")):
         self.items = [release(tag) for tag in tags]
         self.docs = {tag: upstream(tag) for tag in tags}
         self.fetched = []
@@ -63,7 +53,7 @@ class FakeGitHub:
         return copy.deepcopy(self.items)
 
     def tag_revision(self, tag):
-        return REVISION
+        return LEGACY_REVISION if t.stable_version(tag) < t.Version("0.3.9") else REVISION
 
     def get(self, url):
         self.fetched.append(url)
@@ -205,18 +195,18 @@ class AuthoringTests(Workspace):
 class ResolutionTests(Workspace):
     def test_all_matches_ordering_and_prerelease_exclusion(self):
         manifest = t.validate(self.root)
-        releases = [release(v) for v in ("v0.2.0", "v0.1.10", "v0.1.6", "v0.1.5",
-                                         "v0.1.7-rc.1", "dev")]
-        releases += [release("v0.1.8", draft=True), release("v0.1.9", prerelease=True)]
+        releases = [release(v) for v in ("v0.4.0", "v0.3.14", "v0.3.13", "v0.3.12",
+                                         "v0.3.15-rc.1", "dev")]
+        releases += [release("v0.3.16", draft=True), release("v0.3.17", prerelease=True)]
         selected, _ = t.select_releases(manifest, releases)
-        self.assertEqual(selected["model-router"], ["v0.1.6", "v0.1.10"])
+        self.assertEqual(selected["model-router"], ["v0.3.13", "v0.3.14"])
         self.assertEqual(selected["example-model"], selected["model-router"])
 
     def test_semver_syntax(self):
-        cases = {"0.1.6": ["0.1.6"], "~0.1.6": ["0.1.6", "0.1.9"],
-                 "^0.1.6": ["0.1.6", "0.1.9"], ">=0.1.6 <0.2.0": ["0.1.6", "0.1.9"]}
+        cases = {"0.3.13": ["0.3.13"], "~0.3.13": ["0.3.13", "0.3.17"],
+                 "^0.3.13": ["0.3.13", "0.3.17"], ">=0.3.13 <0.4.0": ["0.3.13", "0.3.17"]}
         for spec, expected in cases.items():
-            actual = [v for v in ("0.1.5", "0.1.6", "0.1.9", "0.2.0")
+            actual = [v for v in ("0.3.12", "0.3.13", "0.3.17", "0.4.0")
                       if t.constraint(spec).match(t.Version(v))]
             self.assertEqual(actual, expected)
 
@@ -225,7 +215,7 @@ class ResolutionTests(Workspace):
         with self.assertRaisesRegex(t.Error, "no published stable"):
             t.select_releases(manifest, [release("v0.1.0")])
         with self.assertRaisesRegex(t.Error, "ambiguous"):
-            t.select_releases(manifest, [release("v0.1.6"), release("0.1.6")])
+            t.select_releases(manifest, [release("v0.3.13"), release("0.3.13")])
 
     def test_github_pagination(self):
         gh = t.GitHub()
@@ -239,7 +229,7 @@ class ResolutionTests(Workspace):
         with patch.object(gh, "api", side_effect=[
                 {"object": {"type": "tag", "sha": "a" * 40}},
                 {"object": {"type": "commit", "sha": REVISION}}]):
-            self.assertEqual(gh.tag_revision("v0.1.6"), REVISION)
+            self.assertEqual(gh.tag_revision("v0.3.13"), REVISION)
 
     def test_download_once_for_multiple_workloads(self):
         inputs = self.snapshot()
@@ -259,54 +249,111 @@ class ResolutionTests(Workspace):
             self.snapshot()
 
     def test_failure_on_one_selected_release(self):
-        self.gh.docs["v0.1.10"]["release"]["source_revision"] = "f" * 40
+        self.gh.docs["v0.3.14"]["release"]["source_revision"] = "f" * 40
         with self.assertRaisesRegex(t.Error, "identity"):
             self.snapshot()
         self.assertFalse((self.base / "inputs").exists())
 
     def test_checksum_and_provenance_failures(self):
         inputs = self.snapshot()
-        directory = inputs / "podvm/v0.1.6"
+        directory = inputs / "podvm/v0.3.13"
         (directory / "SHA256SUMS").write_text("0" * 64 + "  measurements.json\n")
         with patch.object(t, "verify_attestation"), self.assertRaisesRegex(t.Error, "checksum"):
-            t.verify_podvm(directory, "v0.1.6", REVISION)
+            t.verify_podvm(directory, "v0.3.13", REVISION)
         with patch.object(t.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "bad signature")):
             with self.assertRaisesRegex(t.Error, "provenance verification failed"):
-                t.verify_attestation(directory / "measurements.json", directory / "bundle", "v0.1.6", REVISION)
+                t.verify_attestation(directory / "measurements.json", directory / "bundle", "v0.3.13", REVISION)
 
     def test_verifier_binds_repository_tag_commit_and_workflow(self):
         with patch.object(t.subprocess, "run",
                           return_value=subprocess.CompletedProcess([], 0, "[{}]", "")) as run:
-            t.verify_attestation(Path("asset"), Path("bundle"), "v0.1.6", REVISION, Path("trusted"))
+            t.verify_attestation(Path("asset"), Path("bundle"), "v0.3.13", REVISION, Path("trusted"))
         command = run.call_args.args[0]
-        for flag, value in (("--repo", t.PODVM_REPO), ("--source-ref", "refs/tags/v0.1.6"),
+        for flag, value in (("--repo", t.PODVM_REPO), ("--source-ref", "refs/tags/v0.3.13"),
                             ("--source-digest", REVISION), ("--signer-workflow", t.PODVM_WORKFLOW)):
             self.assertEqual(command[command.index(flag) + 1], value)
 
     def test_upstream_contract_and_kata_pin(self):
-        doc = upstream()
-        t.validate_podvm(doc, "v0.1.6", REVISION)
-        doc["inputs"]["sources"]["kata_containers"]["revision"] = "f" * 40
-        with self.assertRaisesRegex(t.Error, "unsupported Kata revision"):
-            t.validate_podvm(doc, "v0.1.6", REVISION)
+        t.validate_podvm(upstream(), "v0.3.13", REVISION)
+        for variant in ("cpu", "nvidia"):
+            doc = upstream()
+            doc["inputs"][variant]["sources"]["kata_containers"]["revision"] = "f" * 40
+            with self.subTest(variant=variant), self.assertRaisesRegex(t.Error, "unsupported Kata revision"):
+                t.validate_podvm(doc, "v0.3.13", REVISION)
         doc = upstream()
         doc["profiles"]["2vcpu-8g"]["tdx"]["measurement"]["mr_td"] = "bad"
         with self.assertRaises(t.Error):
-            t.validate_podvm(doc, "v0.1.6", REVISION)
+            t.validate_podvm(doc, "v0.3.13", REVISION)
 
-    def test_variant_contract_and_kata_pin(self):
-        doc = upstream("v0.3.13")
-        t.validate_podvm(doc, "v0.3.13", REVISION)
-        doc["inputs"]["nvidia"]["sources"]["kata_containers"]["revision"] = "f" * 40
-        with self.assertRaisesRegex(t.Error, "unsupported Kata revision in nvidia"):
+    def test_unified_variant_coverage_and_gpu_tdx_rejection(self):
+        for edit in (
+            lambda d: d["artifacts"].pop("nvidia"),
+            lambda d: d["inputs"].pop("cpu"),
+            lambda d: d["profiles"]["2vcpu-8g"].pop("tdx"),
+            lambda d: d["profiles"]["h100-pcie-1-96g"].update(
+                tdx=d["profiles"]["2vcpu-8g"]["tdx"]),
+            lambda d: d["artifacts"]["nvidia"].update(
+                name="podvm-nvidia-ubuntu-24.04-x86_64-wrong.tar.zst"),
+        ):
+            doc = upstream()
+            edit(doc)
+            with self.subTest(edit=edit), self.assertRaises(t.Error):
+                t.validate_podvm(doc, "v0.3.13", REVISION)
+
+    def test_each_variant_bundle_checksum_is_verified(self):
+        inputs = self.snapshot()
+        directory = inputs / "podvm/v0.3.13"
+        original = (directory / "SHA256SUMS").read_text()
+        for variant, artifact in upstream()["artifacts"].items():
+            with self.subTest(variant=variant):
+                (directory / "SHA256SUMS").write_text(original.replace(artifact["sha256"], "0" * 64))
+                with patch.object(t, "verify_attestation"), self.assertRaisesRegex(t.Error, variant + ".*bundle digest"):
+                    t.verify_podvm(directory, "v0.3.13", REVISION)
+
+    def test_single_variant_catalogs(self):
+        for variant in ("cpu", "nvidia"):
+            doc = upstream()
+            doc["profiles"] = {k: p for k, p in doc["profiles"].items() if t.podvm_variant(p) == variant}
+            doc["artifacts"] = {variant: doc["artifacts"][variant]}
+            doc["inputs"] = {variant: doc["inputs"][variant]}
             t.validate_podvm(doc, "v0.3.13", REVISION)
-        doc = upstream("v0.3.13")
-        del doc["artifacts"]["nvidia"], doc["inputs"]["nvidia"]
-        with self.assertRaises(t.Error):  # A GPU profile requires its NVIDIA bundle.
-            t.validate_podvm(doc, "v0.3.13", REVISION)
+            other = "nvidia" if variant == "cpu" else "cpu"
+            doc["artifacts"][other] = upstream()["artifacts"][other]
+            with self.assertRaises(t.Error):
+                t.validate_podvm(doc, "v0.3.13", REVISION)
+
+    def test_legacy_contract_and_kata_pin(self):
+        doc = upstream("v0.1.6")
+        t.validate_podvm(doc, "v0.1.6", LEGACY_REVISION)
+        doc["inputs"]["sources"]["kata_containers"]["revision"] = "f" * 40
+        with self.assertRaisesRegex(t.Error, "unsupported Kata revision"):
+            t.validate_podvm(doc, "v0.1.6", LEGACY_REVISION)
 
 
 class PackagingTests(Workspace):
+    def test_legacy_cpu_and_unified_gpu_can_share_a_release(self):
+        self.gh = FakeGitHub(("v0.1.6", "v0.3.13"))
+        self.change_manifest(lambda m: m["profiles"][0]["podvm"].update(version="0.1.6"))
+        inputs = self.snapshot()
+        with patch.object(t, "verify_attestation"):
+            result = t.package(inputs, self.base / "mixed", RELEASE)
+            self.assertEqual(t.verify_package(self.base / "mixed"), result)
+        router = result["workloads"]["model-router"]["references"]
+        self.assertEqual({r["podvm_version"] for r in router}, {"v0.1.6"})
+        self.assertEqual({r["tee"] for r in router}, {"tdx", "snp"})
+        for record in router:
+            self.assertEqual(record["podvm_variant"], "cpu")
+            self.assertEqual(record["podvm_artifact"], upstream("v0.1.6")["artifact"])
+        gpu = result["workloads"]["example-model"]["references"]
+        self.assertEqual({r["tee"] for r in gpu}, {"snp"})
+        path = self.root / "init-data/example-model/init-data.toml"
+        expected = t.initdata(path.read_bytes(), "example-model")["host_data"]
+        for record in gpu:
+            self.assertEqual(record["podvm_version"], "v0.3.13")
+            self.assertEqual(record["podvm_artifact"], upstream()["artifacts"]["nvidia"])
+            self.assertEqual(record["configuration"]["cpus"], 8)
+            self.assertEqual(record["measurements"]["host_data"], expected)
+
     def test_roundtrip_reproducibility_and_complete_records(self):
         inputs = self.snapshot()
         with patch.object(t, "verify_attestation"):
@@ -319,7 +366,7 @@ class PackagingTests(Workspace):
         workload = first["workloads"]["model-router"]
         records = workload["references"]
         self.assertEqual(len(records), 10)  # Two versions: one TDX + four SNP models each.
-        for tag in ("v0.1.6", "v0.1.10"):
+        for tag in ("v0.3.13", "v0.3.14"):
             group = [r for r in records if r["podvm_version"] == tag]
             tdx = [r for r in group if r["tee"] == "tdx"][0]
             self.assertEqual(set(tdx["measurements"]),
@@ -330,39 +377,63 @@ class PackagingTests(Workspace):
             for record in snp:
                 self.assertEqual(record["configuration"]["vcpu_type"], record["cpu_model"])
                 self.assertEqual(len(record["measurements"]["host_data"]), 64)
+        gpu = first["workloads"]["example-model"]["references"]
+        self.assertEqual(len(gpu), 8)
+        for record in gpu:
+            self.assertEqual(record["tee"], "snp")
+            self.assertEqual(record["podvm_variant"], "nvidia")
+            self.assertEqual(record["gpu"], upstream()["profiles"]["h100-pcie-1-96g"]["gpu"])
+            self.assertEqual(record["podvm_artifact"], upstream(record["podvm_version"])["artifacts"]["nvidia"])
         with self.assertRaisesRegex(t.Error, "output already exists"):
             t.package(inputs, self.base / "dist1", RELEASE)
 
-    def test_gpu_profile_is_snp_only_with_nvidia_bundle(self):
-        self.gh = FakeGitHub(("v0.1.6", "v0.3.13"))
-        ident = "gpu-model"
-        self.change_manifest(lambda m: m["profiles"].append({
-            "id": ident, "initdata": f"init-data/{ident}/init-data.toml",
-            "podvm": {"profile": "h100-pcie-1-96g", "version": "0.3.13"}}))
-        path = self.root / "init-data" / ident / "init-data.toml"
-        path.parent.mkdir()
-        path.write_bytes(f'version = "0.1.0"\nalgorithm = "sha384"\n\n[data]\nid = "{ident}"\n'.encode())
+    def test_every_current_profile_preserves_bundle_topology_and_measurements(self):
+        manifest = t.validate(self.root)
+        template = (self.root / "init-data/example-model/init-data.toml").read_bytes()
+        shutil.rmtree(self.root / "init-data")
+        manifest["profiles"] = []
+        for ident in upstream()["profiles"]:
+            path = f"init-data/{ident}/init-data.toml"
+            t.write_file(self.root, path, template.replace(b"example-model", ident.encode()))
+            manifest["profiles"].append({"id": ident, "initdata": path,
+                                         "podvm": {"profile": ident, "version": "0.3.13"}})
+        (self.root / "measurements.yaml").write_bytes(t.json_bytes(manifest))
         inputs = self.snapshot()
         with patch.object(t, "verify_attestation"):
-            result = t.package(inputs, self.base / "dist", RELEASE)
-            self.assertEqual(t.verify_package(self.base / "dist"), result)
-        records = result["workloads"][ident]["references"]
-        self.assertEqual({r["tee"] for r in records}, {"snp"})
-        self.assertEqual({r["cpu_model"] for r in records},
-                         set(upstream("v0.3.13")["profiles"]["h100-pcie-1-96g"]["sev"]))
-        expected = t.initdata(path.read_bytes(), ident)["host_data"]
-        for record in records:
-            self.assertEqual(record["podvm_artifact"]["name"],
-                             "podvm-nvidia-ubuntu-24.04-x86_64-v0.3.13.tar.zst")
-            self.assertEqual(record["configuration"]["cpus"], 8)
-            self.assertEqual(record["measurements"]["host_data"], expected)
-        # The legacy-format CPU workload keeps resolving against its own releases.
-        router = result["workloads"]["model-router"]["references"]
-        self.assertEqual({r["podvm_version"] for r in router}, {"v0.1.6"})
-        sums = (inputs / "podvm/v0.3.13/SHA256SUMS").read_text()
-        (inputs / "podvm/v0.3.13/SHA256SUMS").write_text(sums.replace("e" * 64, "0" * 64))
-        with patch.object(t, "verify_attestation"), self.assertRaisesRegex(t.Error, "bundle digest"):
-            t.verify_podvm(inputs / "podvm/v0.3.13", "v0.3.13", REVISION)
+            result = t.package(inputs, self.base / "all-profiles", RELEASE)
+            self.assertEqual(t.verify_package(self.base / "all-profiles"), result)
+        for ident, workload in result["workloads"].items():
+            selected = upstream()["profiles"][ident]
+            variant = t.podvm_variant(selected)
+            self.assertEqual(len(workload["references"]), len(selected["sev"]) + ("tdx" in selected))
+            for record in workload["references"]:
+                self.assertEqual(record["podvm_variant"], variant)
+                self.assertEqual(record["podvm_artifact"], upstream()["artifacts"][variant])
+                if variant == "nvidia":
+                    self.assertEqual(record["gpu"], selected["gpu"])
+                    self.assertEqual(record["tee"], "snp")
+                source = selected["tdx"] if record["tee"] == "tdx" else selected["sev"][record["cpu_model"]]
+                self.assertEqual(record["configuration"], source["configuration"])
+                if record["tee"] == "snp":
+                    self.assertEqual(record["measurements"]["measurement"], source["measurement"])
+                else:
+                    for key, value in source["measurement"].items():
+                        self.assertEqual(record["measurements"][key], value)
+
+    def test_catalog_schema_binds_variant_artifact_gpu_and_tee(self):
+        inputs = self.snapshot()
+        with patch.object(t, "verify_attestation"):
+            original = t.catalog(inputs, RELEASE)
+        for edit in (
+            lambda r: r.update(podvm_variant="cpu"),
+            lambda r: r.update(podvm_artifact=upstream()["artifacts"]["cpu"]),
+            lambda r: r.pop("gpu"),
+            lambda r: r.update(tee="tdx"),
+        ):
+            doc = copy.deepcopy(original)
+            edit(doc["workloads"]["example-model"]["references"][0])
+            with self.subTest(edit=edit), self.assertRaises(t.Error):
+                t.check_schema(doc, "measurements.schema.json")
 
     def test_modified_frozen_inputs(self):
         inputs = self.snapshot()
@@ -374,7 +445,7 @@ class PackagingTests(Workspace):
     def test_locked_tag_outside_constraint(self):
         inputs = self.snapshot()
         manifest = t.validate(inputs)
-        manifest["profiles"][0]["podvm"]["version"] = "0.1.6"
+        manifest["profiles"][0]["podvm"]["version"] = "0.3.13"
         (inputs / "measurements.yaml").write_bytes(t.json_bytes(manifest))
         self.refresh_inventory(inputs)
         with patch.object(t, "verify_attestation"), self.assertRaisesRegex(t.Error, "outside constraint"):

@@ -4,11 +4,15 @@ Trustbase publishes complete reference measurements for confidential workloads.
 Each workload combines an exact Init-Data TOML with a named
 [prem-research/podvm](https://github.com/prem-research/podvm) launch profile and a
 semver constraint. A release freezes every matching published stable PodVM
-version and includes reference values for Intel TDX and AMD SEV-SNP.
+version and includes the TEE records published for that profile: Intel TDX and
+AMD SEV-SNP for CPU guests, and SEV-SNP for NVIDIA guests.
 
-The production catalog starts empty. The two definitions under `examples/` are
-non-deployable examples with policies that deny container creation. They are
-tested separately and are never included in production releases.
+The production catalog registers `model-router` on CPU profile `2vcpu-8g` and
+`qwen38-27b-h100-pcie-1-96g` on NVIDIA profile `h100-pcie-1-96g`.
+The two definitions under `examples/` demonstrate CPU and NVIDIA selection with
+policies that deny container creation. They are tested separately and are never
+included in production releases. Trustbase validates and measures the committed
+policy bytes; policy review remains part of authoring a workload.
 
 ## Define a workload
 
@@ -22,7 +26,7 @@ profiles:
     initdata: init-data/model-router/init-data.toml
     podvm:
       profile: 2vcpu-8g
-      version: ">=0.1.6 <0.2.0"
+      version: ">=0.3.13 <0.4.0"
 ~~~
 
 The complete TOML uses Kata's existing format, with the identifier in the
@@ -77,9 +81,9 @@ does not regenerate that TOML or its policy.
 
 | Constraint | Meaning |
 |---|---|
-| `0.1.6` | Exactly 0.1.6 |
-| `>=0.1.6 <0.2.0` | All stable versions in this interval |
-| `^0.1.6` | Compatible versions below 0.2.0 |
+| `0.3.13` | Exactly 0.3.13 |
+| `>=0.3.13 <0.4.0` | All stable versions in this interval |
+| `^0.3.13` | Compatible versions below 0.4.0 |
 | `~1.2.3` | Versions from 1.2.3 up to, excluding, 1.3.0 |
 
 PodVM tags may have a leading `v`. Drafts, GitHub prereleases, semver prereleases,
@@ -87,6 +91,31 @@ and tags without a published release are excluded. Two tags representing the sam
 version are rejected. Missing profiles, unsupported formats, missing assets, or
 invalid provenance on **any** matching release fail the entire resolution.
 Narrow the constraint to the versions approved for this workload.
+
+PodVM publishes one unified `measurements.json` and `SHA256SUMS` for its CPU
+and NVIDIA bundles. Trustbase supports this unified format and retains support
+for older single-bundle CPU catalogs. Separate `measurements-nvidia.json` files
+are not consumed. The committed definitions use v0.3.13 as their baseline; the
+Qwen workload pins that exact version and `model-router` allows newer 0.3.x releases.
+
+The selected profile determines the bundle; no separate variant field is needed
+in `measurements.yaml`. CPU profiles have `tdx` and `sev` records. GPU profiles
+have a `gpu` block and `sev` records and select the NVIDIA bundle. For example:
+
+~~~yaml
+  - id: example-model
+    initdata: init-data/example-model/init-data.toml
+    podvm:
+      profile: h100-pcie-1-96g
+      version: "^0.3.13"
+~~~
+
+The published GPU profiles are `h100-pcie-1-96g`, `h200-pcie-1-96g`,
+`h100-hgx-8-768g`, `h100-pcie-nvlink-8-768g`, `h200-hgx-8-768g`,
+`b200-hgx-8-768g`, and `b300-hgx-8-768g`. GPU profiles publish SNP references
+only. Trustbase preserves the declared GPU family, platform, GPU count, and
+NVSwitch count; these labels do not constitute GPU hardware attestation. GPU TDX
+candidates are not accepted as published references.
 
 New PodVM releases never change an existing Trustbase release. Publish another
 Trustbase tag to resolve again. Removing a workload or narrowing its range takes
@@ -111,7 +140,8 @@ QEMU's `host-data` and `mrconfigid` arguments use standard base64 of those same
 raw register bytes.
 
 The compatibility baseline is Kata 4.0.0 commit
-`cf82bb35c80320178bf7570252fe75d6fb263209`, used by PodVM v0.1.6.
+`cf82bb35c80320178bf7570252fe75d6fb263209`, used by both variants of PodVM v0.3.13.
+The revision is checked independently in every variant's provenance.
 A different declared Kata revision is rejected until its semantics have been
 reviewed and the compatibility pin/conformance tests updated. See Kata's
 [Go digest calculation](https://github.com/kata-containers/kata-containers/blob/cf82bb35c80320178bf7570252fe75d6fb263209/src/runtime/pkg/oci/utils.go)
@@ -147,11 +177,13 @@ make integration
 ~~~
 
 `make test` is offline and mocks only the network/signature-verifier boundary.
-`make integration` resolves the real PodVM v0.1.6 release, verifies both upstream
-assets' attestations, and round-trips a temporary release. Public API reads work
+`make integration` resolves the real PodVM v0.3.13 release, verifies the unified
+measurement/checksum attestations and both bundle digests, and round-trips a
+temporary release with CPU and NVIDIA workloads. To test a newer published
+stable release, override `PODVM_VERSION` when running `make integration`. Public API reads work
 without authentication; CI supplies `GH_TOKEN` to avoid anonymous rate limits.
 
-After the first repository commit, build an example candidate:
+Build an example candidate:
 
 ~~~sh
 python trustbase.py --root examples resolve --output build/example-inputs
@@ -199,11 +231,12 @@ The catalog follows `schemas/measurements.schema.json`. At `workloads[<id>]`:
 - `references` contains complete records for each selected version and TEE/CPU.
 
 Each reference identifies the exact PodVM tag, source commit, measurement-asset
-digest, PodVM bundle digest, launch profile, and launch configuration. TDX records
-carry `mr_td`, `rtmr_0`, `rtmr_1`, `rtmr_2`, and `mr_config_id` together. SNP records
-carry the CPU model, `measurement`, and `host_data` together. GPU profiles boot the
-NVIDIA bundle and publish SNP records only, because PodVM has no qualified GPU TDX
-measurement.
+digest, `podvm_variant` (`cpu` or `nvidia`), the corresponding PodVM bundle
+digest, launch profile, and launch configuration. NVIDIA records also retain
+the profile's `gpu` metadata. The schema binds variant, bundle name, GPU metadata,
+and allowed TEE together. TDX records carry `mr_td`, `rtmr_0`, `rtmr_1`, `rtmr_2`,
+and `mr_config_id` together. SNP records
+carry the CPU model, `measurement`, and `host_data` together.
 
 A relying party verifies the Trustbase release's provenance, selects the
 **intended** workload ID, and matches all measurement fields of one complete
@@ -232,7 +265,9 @@ trust. Consumers can also pin `--source-digest` to the approved commit.
 Upstream attestations are verified against the PodVM repository, the `podvm.yml`
 signer workflow, the tag ref, and its dereferenced commit. The resolver downloads
 only measurement/checksum assets, not the guest disk bundle; the bundle digest
-is taken from those verified assets.
+is taken from those verified assets. Checksums for every declared variant are
+checked, including variants not selected by a workload. No measurements are
+recomputed or inferred from another profile.
 
 ## Reproduce a release
 
@@ -255,7 +290,9 @@ independent verifier input and are not accepted implicitly from an input archive
 ## CI and publication
 
 PRs, pushes to `main`, and manual dispatch run validation, offline tests, Kata
-conformance, live integration, and packaging on ordinary Ubuntu runners.
+conformance, live CPU/NVIDIA integration, and packaging on ordinary Ubuntu runners.
+Actions are pinned to commits, Python to 3.12, Go to 1.25.12, and the integration
+release to PodVM v0.3.13.
 No confidential hardware or KVM is required. Empty production catalogs produce
 empty preview catalogs so bootstrap CI remains usable.
 

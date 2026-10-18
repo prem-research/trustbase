@@ -4,7 +4,7 @@ profiles:
     initdata: init-data/model-router/init-data.toml
     podvm:
       profile: 2vcpu-8g
-      version: ">=0.1.6 <0.2.0"
+      version: ">=0.3.13 <0.4.0"
   - id: qwen38-27b-h100-pcie-1-96g
     initdata: init-data/qwen38-27b-h100-pcie-1-96g/init-data.toml
     podvm:

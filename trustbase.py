@@ -298,15 +298,11 @@ def verify_attestation(artifact, bundle, tag, revision, trusted_root=None):
 
 
 def podvm_variants(doc):
-    """Map each PodVM bundle variant (cpu, nvidia) to its artifact and build inputs."""
-    if "artifact" in doc:  # Single CPU bundle format, before v0.3.9.
+    """Map legacy and unified catalogs to their bundle artifacts and build inputs."""
+    if "artifact" in doc:
         return {"cpu": {"artifact": doc["artifact"], "inputs": doc["inputs"]}}
     return {variant: {"artifact": artifact, "inputs": doc["inputs"][variant]}
             for variant, artifact in doc["artifacts"].items()}
-
-
-def profile_variant(profile):
-    return "nvidia" if "gpu" in profile else "cpu"
 
 
 def validate_podvm(doc, tag, revision):
@@ -318,12 +314,25 @@ def validate_podvm(doc, tag, revision):
     expected_schema = (f"https://raw.githubusercontent.com/{PODVM_REPO}/{revision}"
                        "/schemas/measurements.schema.json")
     require(doc["schema"] == expected_schema, f"{tag}: unexpected PodVM schema URL")
-    # This is the contract actually reviewed and covered by the Kata oracle.
-    for variant, values in sorted(podvm_variants(doc).items()):
-        require(values["inputs"].get("sources", {}).get("kata_containers", {}).get("revision")
-                == KATA_REVISION, f"{tag}: unsupported Kata revision in {variant} bundle; review "
-                                  "Init-Data semantics and update the compatibility pin before "
-                                  "accepting it")
+    # Profile GPU metadata selects the bundle, as in PodVM's unified catalog.
+    variants = {podvm_variant(profile) for profile in doc["profiles"].values()}
+    bundles = podvm_variants(doc)
+    require(set(bundles) == variants and
+            ("artifact" in doc or set(doc["inputs"]) == variants),
+            f"{tag}: PodVM artifacts/inputs differ from profile variants")
+    for variant in sorted(variants):
+        # Both guest variants must use the contract covered by the Kata oracle.
+        require(bundles[variant]["inputs"].get("sources", {}).get("kata_containers", {}).get("revision")
+                == KATA_REVISION, f"{tag}: {variant}: unsupported Kata revision; review Init-Data "
+                                  "semantics and update the compatibility pin before accepting it")
+        prefix = "podvm-nvidia-ubuntu" if variant == "nvidia" else "podvm-ubuntu"
+        safe_tag = re.sub(r"[^A-Za-z0-9._-]", "_", tag)
+        require(bundles[variant]["artifact"]["name"] == f"{prefix}-24.04-x86_64-{safe_tag}.tar.zst",
+                f"{tag}: {variant}: bundle name differs from release identity")
+
+
+def podvm_variant(profile):
+    return "nvidia" if "gpu" in profile else "cpu"
 
 
 def verify_podvm(directory, tag, revision, trusted_root=None):
@@ -337,9 +346,10 @@ def verify_podvm(directory, tag, revision, trusted_root=None):
     sums = parse_sums(sums_file.read_bytes())
     require(sums.get("measurements.json") == hash_file(measurement),
             f"{tag}: measurements.json checksum mismatch")
-    for values in podvm_variants(doc).values():
-        require(sums.get(values["artifact"]["name"]) == values["artifact"]["sha256"],
-                f"{tag}: PodVM bundle digest differs from SHA256SUMS")
+    for variant, bundle in podvm_variants(doc).items():
+        artifact = bundle["artifact"]
+        require(sums.get(artifact["name"]) == artifact["sha256"],
+                f"{tag}: {variant}: PodVM bundle digest differs from SHA256SUMS")
     return doc
 
 
@@ -467,13 +477,16 @@ def catalog(inputs, release, trusted_root=None):
         for tag in sorted(lock["workloads"][ident],
                           key=lambda tag: (stable_version(tag).precedence_key, tag)):
             selected = documents[tag]["profiles"][profile["podvm"]["profile"]]
+            variant = podvm_variant(selected)
             common = {
                 "podvm_version": tag, "podvm_profile": profile["podvm"]["profile"],
                 "podvm_source_revision": lock["releases"][tag]["source_revision"],
                 "podvm_measurements_sha256": lock["releases"][tag]["measurements_sha256"],
-                "podvm_artifact": podvm_variants(documents[tag])[profile_variant(selected)]["artifact"],
+                "podvm_variant": variant,
+                "podvm_artifact": podvm_variants(documents[tag])[variant]["artifact"],
             }
-            # GPU profiles have no qualified TDX measurement upstream; they are SNP only.
+            if "gpu" in selected:
+                common["gpu"] = selected["gpu"]
             if "tdx" in selected:
                 records.append({
                     **common, "tee": "tdx", "configuration": selected["tdx"]["configuration"],
