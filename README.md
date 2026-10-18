@@ -49,6 +49,29 @@ Commit complete policies and other payloads, such as `aa.toml`, `cdh.toml`, or
 `model-mounts.json`, directly into `[data]` as strings. Trustbase measures these
 definitions; it does not run genpolicy or resolve model content.
 
+### Rebuild a model pack referenced by Init-Data
+
+For a workload with `model-mounts.json` in its Init-Data, use its `modelid` as
+`M` and the same digest-pinned packer image as the published pack for `IMG`.
+[Modelwrap v0.2.1](https://github.com/tinfoilsh/modelwrap/blob/v0.2.1/README.md)
+can rebuild the pack either by downloading the pinned Hugging Face revision or
+from a local directory containing that exact revision's files:
+
+~~~sh
+M='organization/model@full-commit'   # the published modelid
+modelwrap --image "$IMG" --verify --output out "$M"
+# Or, with local model files:
+modelwrap --image "$IMG" --verify --model-dir "$MODEL_DIR" --output out "$M"
+~~~
+
+Either route produces an `.mpk` and an `.info` containing the root hash, hash
+offset, and UUID recorded in the measured `model-mounts.json`.
+Use a fresh output directory for each run.
+The exact packer image and model files matter; the UUID alone is derived from
+`M` and does not establish the model bytes. Trustbase derives `host_data` from
+the committed Init-Data TOML bytes as described below; rebuilding the pack
+does not regenerate that TOML or its policy.
+
 `podvm.version` uses npm-style semver, through pinned `semantic-version`
 `NpmSpec`:
 

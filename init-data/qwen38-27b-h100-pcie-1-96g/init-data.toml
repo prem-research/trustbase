@@ -2368,7 +2368,7 @@ policy_data := {
             "-o",
             "pipefail",
             "-c",
-            "vllm serve /models/model/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a --host 0.0.0.0 --port 8000 --served-model-name qwen38-27b --trust-remote-code --kv-cache-dtype fp8 --gpu-memory-utilization 0.90 --max-model-len 262144 --max-num-seqs 128 --max-num-batched-tokens 16384 --enable-prefix-caching --enable-prompt-tokens-details --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":3}' >/dev/null 2>&1"
+            "vllm serve /models/model --host 0.0.0.0 --port 8000 --served-model-name qwen38-27b --trust-remote-code --kv-cache-dtype fp8 --gpu-memory-utilization 0.90 --max-model-len 262144 --max-num-seqs 128 --max-num-batched-tokens 16384 --enable-prefix-caching --enable-prompt-tokens-details --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":3}' >/dev/null 2>&1"
           ],
           "Env": [
             "PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -2558,7 +2558,7 @@ policy_data := {
           },
           {
             "destination": "/models/model",
-            "source": "/dev/loop10",
+            "source": "/dev/disk/by-uuid/07074027-62a4-548d-bbf6-3ba2f85aa868",
             "type_": "bind",
             "options": [
               "rbind",
@@ -3164,9 +3164,9 @@ policy_data := {
 "model-mounts.json" = '''
 [
   {
-    "modelid": "model@8cbdf87d16737722a81d5c26719d32f6d1b53ab758c92f604c31c400c8035818",
+    "modelid": "Qwen/Qwen3.8-27B-FP8@017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
     "mount_path": "/models/model",
-    "info": "bb84f0da56c338c51061fdbfaa6a1f2c7a54dc99f54eaf1f9fa7f341d2d3f98f_30890098688_a9bc3c8c-671d-510a-9470-34ed6c619696"
+    "info": "e7cec31fdaaec82c8b489f56d0baf61fa132a9c90df716a6f7a1f20486611fe9_30890065920_07074027-62a4-548d-bbf6-3ba2f85aa868"
   }
 ]
 
