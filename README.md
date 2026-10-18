@@ -303,5 +303,16 @@ interrupted drafts, are rejected; assets are never clobbered. Publication uses
 only `GITHUB_TOKEN` and GitHub OIDC; no PAT or external-service secret is needed
 for these public repositories.
 
+After a successful release publication, a separate job deploys the identical
+`measurements.json` to GitHub Pages at
+<https://prem-research.github.io/trustbase/measurements.json>.
+Each successful tag deployment replaces that file; use the immutable release
+assets when pinning a particular version. The Pages copy can be checked with the
+same release provenance attestation.
+
+For initial setup, select **GitHub Actions** under **Settings → Pages → Build and
+deployment → Source**. If the `github-pages` environment restricts deployment
+branches and tags, allow release tags matching `v*`.
+
 Main pushes and manual runs do not publish. Tag jobs are serialized per tag and
 are never cancelled by a newer run of the same tag.
