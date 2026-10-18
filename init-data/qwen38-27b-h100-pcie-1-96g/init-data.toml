@@ -1584,21 +1584,6 @@ allow_copy_file if {
     print("allow_copy_file directory: true")
 }
 
-# HF hub cache carve-out: huggingface snapshot dirs use relative symlinks of the
-# canonical shape ../../blobs/<sha> (two levels up, into the model's own blobs/).
-# check_directory_traversal rejects every ".." component, so these can never pass
-# the strict symlink rule below. OR'ed clause: allow exactly that link shape,
-# still requiring the copy path to sit under the shared-containers prefix.
-allow_copy_file if {
-    print("allow_copy_file symlink (HF hub blobs pattern)")
-
-    input.file_type == "Symlink"
-    regex.match(`^\.\./\.\./blobs/[0-9a-f]{32,64}$`, input.symlink_target)
-    allow_copy_file_path(input.path, ".*/.+")
-
-    print("allow_copy_file symlink (HF hub blobs pattern): true")
-}
-
 allow_copy_file if {
     print("allow_copy_file symlink")
 

@@ -305,7 +305,7 @@ for these public repositories.
 
 After a successful release publication, a separate job deploys the identical
 `measurements.json` to GitHub Pages at
-<https://prem-research.github.io/trustbase/measurements.json>.
+<https://trustbase.prem.io/measurements.json>.
 Each successful tag deployment replaces that file; use the immutable release
 assets when pinning a particular version. The Pages copy can be checked with the
 same release provenance attestation.
