@@ -2368,7 +2368,7 @@ policy_data := {
             "-o",
             "pipefail",
             "-c",
-            "vllm serve /models/model/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a --host 0.0.0.0 --port 8000 --served-model-name qwen38-27b --trust-remote-code --kv-cache-dtype fp8 --gpu-memory-utilization 0.90 --max-model-len 262144 --max-num-seqs 128 --max-num-batched-tokens 16384 --enable-prefix-caching --enable-prompt-tokens-details --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":3}' 2>&1 | tee /dev/termination-log"
+            "vllm serve /models/model/snapshots/017b9c7af6b5689d5dd426a76e0bc077eb5ca20a --host 0.0.0.0 --port 8000 --served-model-name qwen38-27b --trust-remote-code --kv-cache-dtype fp8 --gpu-memory-utilization 0.90 --max-model-len 262144 --max-num-seqs 128 --max-num-batched-tokens 16384 --enable-prefix-caching --enable-prompt-tokens-details --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":3}' >/dev/null 2>&1"
           ],
           "Env": [
             "PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -2748,7 +2748,9 @@ policy_data := {
             "Username": ""
           },
           "Args": [
-            "/entrypoint.sh"
+            "/bin/sh",
+            "-c",
+            "exec /entrypoint.sh >/dev/null 2>&1"
           ],
           "Env": [
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
