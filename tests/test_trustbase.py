@@ -25,6 +25,22 @@ def upstream(tag="v0.1.6"):
     doc = t.load_json(FIXTURE.read_bytes())
     doc["release"]["version"] = tag
     doc["artifact"]["name"] = f"podvm-ubuntu-24.04-x86_64-{tag}.tar.zst"
+    if t.stable_version(tag) < t.Version("0.3.9"):
+        return doc
+    # Per-variant format (v0.3.9+), derived from the public fixture: a CPU bundle plus
+    # an NVIDIA bundle whose GPU profile publishes SNP measurements only.
+    cpu = doc.pop("artifact")
+    nvidia = {**cpu, "name": f"podvm-nvidia-ubuntu-24.04-x86_64-{tag}.tar.zst", "sha256": "e" * 64}
+    inputs = {**doc["inputs"], "launch_profiles_sha256": "d" * 64}
+    doc["artifacts"] = {"cpu": cpu, "nvidia": nvidia}
+    doc["inputs"] = {"cpu": inputs, "nvidia": copy.deepcopy(inputs)}
+    sev = copy.deepcopy(doc["profiles"]["2vcpu-8g"]["sev"])
+    for entry in sev.values():
+        entry["configuration"].update(cpus=8, memory="96G")
+    doc["profiles"]["h100-pcie-1-96g"] = {
+        "gpu": {"family": "H100", "platform": "pcie", "count": 1, "nvswitch_count": 0},
+        "sev": sev,
+    }
     return doc
 
 
@@ -56,8 +72,9 @@ class FakeGitHub:
         raw = t.json_bytes(doc)
         if name == "measurements.json":
             return raw
-        return (f"{t.sha256(raw)}  measurements.json\n"
-                f"{doc['artifact']['sha256']}  {doc['artifact']['name']}\n").encode()
+        return (f"{t.sha256(raw)}  measurements.json\n" + "".join(
+            f"{v['artifact']['sha256']}  {v['artifact']['name']}\n"
+            for v in t.podvm_variants(doc).values())).encode()
 
     def bundles(self, digest):
         return b'{"test_only":true}\n'
@@ -277,6 +294,17 @@ class ResolutionTests(Workspace):
         with self.assertRaises(t.Error):
             t.validate_podvm(doc, "v0.1.6", REVISION)
 
+    def test_variant_contract_and_kata_pin(self):
+        doc = upstream("v0.3.13")
+        t.validate_podvm(doc, "v0.3.13", REVISION)
+        doc["inputs"]["nvidia"]["sources"]["kata_containers"]["revision"] = "f" * 40
+        with self.assertRaisesRegex(t.Error, "unsupported Kata revision in nvidia"):
+            t.validate_podvm(doc, "v0.3.13", REVISION)
+        doc = upstream("v0.3.13")
+        del doc["artifacts"]["nvidia"], doc["inputs"]["nvidia"]
+        with self.assertRaises(t.Error):  # A GPU profile requires its NVIDIA bundle.
+            t.validate_podvm(doc, "v0.3.13", REVISION)
+
 
 class PackagingTests(Workspace):
     def test_roundtrip_reproducibility_and_complete_records(self):
@@ -304,6 +332,37 @@ class PackagingTests(Workspace):
                 self.assertEqual(len(record["measurements"]["host_data"]), 64)
         with self.assertRaisesRegex(t.Error, "output already exists"):
             t.package(inputs, self.base / "dist1", RELEASE)
+
+    def test_gpu_profile_is_snp_only_with_nvidia_bundle(self):
+        self.gh = FakeGitHub(("v0.1.6", "v0.3.13"))
+        ident = "gpu-model"
+        self.change_manifest(lambda m: m["profiles"].append({
+            "id": ident, "initdata": f"init-data/{ident}/init-data.toml",
+            "podvm": {"profile": "h100-pcie-1-96g", "version": "0.3.13"}}))
+        path = self.root / "init-data" / ident / "init-data.toml"
+        path.parent.mkdir()
+        path.write_bytes(f'version = "0.1.0"\nalgorithm = "sha384"\n\n[data]\nid = "{ident}"\n'.encode())
+        inputs = self.snapshot()
+        with patch.object(t, "verify_attestation"):
+            result = t.package(inputs, self.base / "dist", RELEASE)
+            self.assertEqual(t.verify_package(self.base / "dist"), result)
+        records = result["workloads"][ident]["references"]
+        self.assertEqual({r["tee"] for r in records}, {"snp"})
+        self.assertEqual({r["cpu_model"] for r in records},
+                         set(upstream("v0.3.13")["profiles"]["h100-pcie-1-96g"]["sev"]))
+        expected = t.initdata(path.read_bytes(), ident)["host_data"]
+        for record in records:
+            self.assertEqual(record["podvm_artifact"]["name"],
+                             "podvm-nvidia-ubuntu-24.04-x86_64-v0.3.13.tar.zst")
+            self.assertEqual(record["configuration"]["cpus"], 8)
+            self.assertEqual(record["measurements"]["host_data"], expected)
+        # The legacy-format CPU workload keeps resolving against its own releases.
+        router = result["workloads"]["model-router"]["references"]
+        self.assertEqual({r["podvm_version"] for r in router}, {"v0.1.6"})
+        sums = (inputs / "podvm/v0.3.13/SHA256SUMS").read_text()
+        (inputs / "podvm/v0.3.13/SHA256SUMS").write_text(sums.replace("e" * 64, "0" * 64))
+        with patch.object(t, "verify_attestation"), self.assertRaisesRegex(t.Error, "bundle digest"):
+            t.verify_podvm(inputs / "podvm/v0.3.13", "v0.3.13", REVISION)
 
     def test_modified_frozen_inputs(self):
         inputs = self.snapshot()

@@ -544,7 +544,7 @@
                           "const": "application/zstd"
                         },
                         "name": {
-                          "pattern": "^podvm-ubuntu-24\\.04-x86_64-.+\\.tar\\.zst$",
+                          "pattern": "^podvm-(nvidia-)?ubuntu-24\\.04-x86_64-.+\\.tar\\.zst$",
                           "type": "string"
                         },
                         "sha256": {
@@ -685,7 +685,7 @@
                           "const": "application/zstd"
                         },
                         "name": {
-                          "pattern": "^podvm-ubuntu-24\\.04-x86_64-.+\\.tar\\.zst$",
+                          "pattern": "^podvm-(nvidia-)?ubuntu-24\\.04-x86_64-.+\\.tar\\.zst$",
                           "type": "string"
                         },
                         "sha256": {

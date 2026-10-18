@@ -178,7 +178,9 @@ The catalog follows `schemas/measurements.schema.json`. At `workloads[<id>]`:
 Each reference identifies the exact PodVM tag, source commit, measurement-asset
 digest, PodVM bundle digest, launch profile, and launch configuration. TDX records
 carry `mr_td`, `rtmr_0`, `rtmr_1`, `rtmr_2`, and `mr_config_id` together. SNP records
-carry the CPU model, `measurement`, and `host_data` together.
+carry the CPU model, `measurement`, and `host_data` together. GPU profiles boot the
+NVIDIA bundle and publish SNP records only, because PodVM has no qualified GPU TDX
+measurement.
 
 A relying party verifies the Trustbase release's provenance, selects the
 **intended** workload ID, and matches all measurement fields of one complete

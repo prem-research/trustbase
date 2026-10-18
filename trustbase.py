@@ -297,8 +297,21 @@ def verify_attestation(artifact, bundle, tag, revision, trusted_root=None):
     require(bool(load_json(result.stdout)), f"{tag}: verifier returned no attestations")
 
 
+def podvm_variants(doc):
+    """Map each PodVM bundle variant (cpu, nvidia) to its artifact and build inputs."""
+    if "artifact" in doc:  # Single CPU bundle format, before v0.3.9.
+        return {"cpu": {"artifact": doc["artifact"], "inputs": doc["inputs"]}}
+    return {variant: {"artifact": artifact, "inputs": doc["inputs"][variant]}
+            for variant, artifact in doc["artifacts"].items()}
+
+
+def profile_variant(profile):
+    return "nvidia" if "gpu" in profile else "cpu"
+
+
 def validate_podvm(doc, tag, revision):
-    check_schema(doc, "vendor/podvm-measurements.schema.json")
+    check_schema(doc, "vendor/podvm-measurements.schema.json" if "artifact" in doc
+                 else "vendor/podvm-measurements-variants.schema.json")
     require(doc["release"] == {
         "version": tag, "source_repository": PODVM_REPO, "source_revision": revision,
     }, f"{tag}: PodVM release identity does not match the resolved tag")
@@ -306,9 +319,11 @@ def validate_podvm(doc, tag, revision):
                        "/schemas/measurements.schema.json")
     require(doc["schema"] == expected_schema, f"{tag}: unexpected PodVM schema URL")
     # This is the contract actually reviewed and covered by the Kata oracle.
-    require(doc["inputs"].get("sources", {}).get("kata_containers", {}).get("revision")
-            == KATA_REVISION, f"{tag}: unsupported Kata revision; review Init-Data semantics "
-                              "and update the compatibility pin before accepting it")
+    for variant, values in sorted(podvm_variants(doc).items()):
+        require(values["inputs"].get("sources", {}).get("kata_containers", {}).get("revision")
+                == KATA_REVISION, f"{tag}: unsupported Kata revision in {variant} bundle; review "
+                                  "Init-Data semantics and update the compatibility pin before "
+                                  "accepting it")
 
 
 def verify_podvm(directory, tag, revision, trusted_root=None):
@@ -322,8 +337,9 @@ def verify_podvm(directory, tag, revision, trusted_root=None):
     sums = parse_sums(sums_file.read_bytes())
     require(sums.get("measurements.json") == hash_file(measurement),
             f"{tag}: measurements.json checksum mismatch")
-    require(sums.get(doc["artifact"]["name"]) == doc["artifact"]["sha256"],
-            f"{tag}: PodVM bundle digest differs from SHA256SUMS")
+    for values in podvm_variants(doc).values():
+        require(sums.get(values["artifact"]["name"]) == values["artifact"]["sha256"],
+                f"{tag}: PodVM bundle digest differs from SHA256SUMS")
     return doc
 
 
@@ -455,13 +471,15 @@ def catalog(inputs, release, trusted_root=None):
                 "podvm_version": tag, "podvm_profile": profile["podvm"]["profile"],
                 "podvm_source_revision": lock["releases"][tag]["source_revision"],
                 "podvm_measurements_sha256": lock["releases"][tag]["measurements_sha256"],
-                "podvm_artifact": documents[tag]["artifact"],
+                "podvm_artifact": podvm_variants(documents[tag])[profile_variant(selected)]["artifact"],
             }
-            records.append({
-                **common, "tee": "tdx", "configuration": selected["tdx"]["configuration"],
-                "measurements": {**selected["tdx"]["measurement"],
-                                 "mr_config_id": values["mr_config_id"]},
-            })
+            # GPU profiles have no qualified TDX measurement upstream; they are SNP only.
+            if "tdx" in selected:
+                records.append({
+                    **common, "tee": "tdx", "configuration": selected["tdx"]["configuration"],
+                    "measurements": {**selected["tdx"]["measurement"],
+                                     "mr_config_id": values["mr_config_id"]},
+                })
             for cpu, data in sorted(selected["sev"].items()):
                 records.append({
                     **common, "tee": "snp", "cpu_model": cpu, "configuration": data["configuration"],
