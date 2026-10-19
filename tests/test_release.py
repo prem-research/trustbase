@@ -24,6 +24,9 @@ class ReleaseTests(unittest.TestCase):
             "GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_REPOSITORY_ID": "12345",
             "GH_TOKEN": "test-only",
         }
+        lookup = patch.object(t, "github_repository_id", return_value="12345")
+        lookup.start()
+        self.addCleanup(lookup.stop)
 
     def test_only_stable_tag_pushes_can_publish(self):
         with patch.dict(os.environ, self.env, clear=True):
@@ -58,20 +61,21 @@ class ReleaseTests(unittest.TestCase):
                     with self.assertRaises(t.Error):
                         release.check()
 
-    def test_repository_id_is_checked_when_pinned(self):
+    def test_repository_id_is_checked_against_github(self):
         not_found = urllib.error.HTTPError("test", 404, "", {}, None)
         with patch.dict(os.environ, self.env, clear=True), \
                 patch.object(Path, "read_bytes", return_value=self.catalog()), \
+                patch.object(release, "published_releases", return_value=[]), \
                 patch.object(release.urllib.request, "urlopen", side_effect=not_found):
-            with patch.object(t, "TRUSTBASE_REPOSITORY_ID", 12345):
-                release.check()
-            with patch.object(t, "TRUSTBASE_REPOSITORY_ID", 999):
+            release.check()
+            with patch.object(t, "github_repository_id", return_value="999"):
                 with self.assertRaisesRegex(t.Error, "unexpected repository"):
                     release.check()
 
     def test_existing_release_and_api_failures_never_overwrite(self):
         with patch.dict(os.environ, self.env, clear=True), \
-                patch.object(Path, "read_bytes", return_value=self.catalog()):
+                patch.object(Path, "read_bytes", return_value=self.catalog()), \
+                patch.object(release, "published_releases", return_value=[]):
             with patch.object(release.urllib.request, "urlopen"):
                 with self.assertRaisesRegex(t.Error, "already exists"):
                     release.check()
@@ -83,6 +87,19 @@ class ReleaseTests(unittest.TestCase):
             with patch.object(release.urllib.request, "urlopen",
                               side_effect=urllib.error.HTTPError("test", 404, "", {}, None)):
                 self.assertEqual(release.check(), ("v1.0.0", "prem-research/trustbase", "a" * 40))
+
+    def test_publish_rechecks_latest_published_predecessor(self):
+        catalog = t.load_json(self.catalog())
+        catalog["release"]["previous"] = {"version": "v0.9.0", "measurements_sha256": "b" * 64}
+        not_found = urllib.error.HTTPError("test", 404, "", {}, None)
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(Path, "read_bytes", return_value=t.json_bytes(catalog)), \
+                patch.object(release.urllib.request, "urlopen", side_effect=not_found):
+            with patch.object(release, "published_releases", return_value=["v0.9.0"]):
+                release.check()
+            with patch.object(release, "published_releases", return_value=["v0.9.0", "v0.9.1"]):
+                with self.assertRaisesRegex(t.Error, "latest published release is v0.9.1"):
+                    release.check()
 
     def test_publish_requires_exactly_the_three_assets(self):
         assets = [Path("dist/measurements.json"), Path("dist/provenance.sigstore.json"),

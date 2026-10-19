@@ -137,7 +137,24 @@ class ReceiverTests(unittest.TestCase):
         with patch.object(receive, "api", lambda repository, path, token: b"[]"):
             self.assertEqual(receive.next_tag("prem-research/trustbase", "x"), "v1.0.0")
 
-    def test_main_dry_run_never_pushes(self):
+    def test_publish_waits_for_previous_release_without_skipping_tags(self):
+        output = Path(self.temporary.name) / "out"
+        output.mkdir()
+        (output / "prepared.json").write_bytes(t.json_bytes({
+            "repository": "prem-research/trustbase", "tag": "v1.0.2"}))
+        env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GH_TOKEN": "read-only"}
+        with patch.dict(os.environ, env, clear=True), patch.object(receive, "OUTPUT", output), \
+                patch.object(receive, "latest_published_tag", side_effect=["v1.0.0", "v1.0.1"]), \
+                patch.object(receive, "next_tag", return_value="v1.0.2"), \
+                patch.object(receive.time, "sleep") as sleep:
+            receive.await_predecessor(timeout=60)
+        sleep.assert_called_once_with(15)
+        with patch.dict(os.environ, env, clear=True), patch.object(receive, "OUTPUT", output), \
+                patch.object(receive, "latest_published_tag", return_value="v1.0.3"):
+            with self.assertRaisesRegex(t.Error, "newer release already supersedes"):
+                receive.await_predecessor(timeout=0)
+
+    def test_main_prepares_without_pushing(self):
         env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_SHA": "a" * 40,
                "GITHUB_EVENT_PATH": str(self.event()), "FLEET_TOKEN": "fleet", "GH_TOKEN": "read-only"}
         output = Path(self.temporary.name) / "out"
@@ -205,7 +222,7 @@ class ReceiverTests(unittest.TestCase):
         env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_SHA": "a" * 40,
                "GITHUB_EVENT_PATH": str(self.event(path=f"candidates/{t.sha256(committed)}.toml",
                                                    sha256=t.sha256(committed))),
-               "FLEET_TOKEN": "fleet", "RELEASE_TOKEN": "release", "TRUSTBASE_ADMISSION_MODE": "publish"}
+               "FLEET_TOKEN": "fleet", "RELEASE_TOKEN": "release"}
         output = Path(self.temporary.name) / "out"
         with patch.dict(os.environ, env, clear=True), patch.object(receive, "api", FakeFleet(content=committed)), \
                 patch.object(receive, "ROOT", self.root), patch.object(receive, "OUTPUT", output), \

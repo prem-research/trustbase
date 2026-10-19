@@ -4,8 +4,9 @@
 # `floor`. `rules.accepted_sha256` pins the exact Rego rules text (everything before
 # `policy_data := {`) that was reviewed: a candidate whose rules differ is rejected until the new
 # digest is accepted here. `defaults` is the exact set of `default <Request> := <bool>` headers, and
-# `policy_data` the generated constants that must stay identical. Every change needs CODEOWNERS
-# review. Digests must be quoted: an all-digit hex string would otherwise be a YAML integer.
+# `policy_data` the generated constants that must stay identical. Every change goes through a
+# reviewed pull request. Digests must be quoted: an all-digit hex string would otherwise be a
+# YAML integer.
 schema_version: 1
 evaluator:
   kata_revision: cf82bb35c80320178bf7570252fe75d6fb263209

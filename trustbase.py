@@ -33,10 +33,6 @@ PODVM_REPO = "prem-research/podvm"
 PODVM_WORKFLOW = PODVM_REPO + "/.github/workflows/podvm.yml"
 TRUSTBASE_REPO = "prem-research/trustbase"
 TRUSTBASE_WORKFLOW = TRUSTBASE_REPO + "/.github/workflows/release.yml"
-# Numeric GitHub repository id of TRUSTBASE_REPO. Repository names can be reused after a
-# rename, so provenance verification also compares the certificate's stable identifier
-# once this is set (`gh api repos/prem-research/trustbase --jq .id`).
-TRUSTBASE_REPOSITORY_ID = None
 BUNDLE_NAME = "provenance.sigstore.json"
 KATA_REVISION = "cf82bb35c80320178bf7570252fe75d6fb263209"
 MAX_FILE = 16 * 1024 * 1024
@@ -291,6 +287,14 @@ class GitHub:
                 return b"".join(json.dumps(b, sort_keys=True, separators=(",", ":")).encode()
                                 + b"\n" for b in sorted(bundles, key=lambda b: json_bytes(b)))
         raise Error("GitHub attestation pagination limit exceeded")
+
+
+def github_repository_id(repository):
+    record = GitHub().api(f"repos/{repository}")
+    ident = record.get("id") if isinstance(record, dict) else None
+    require(type(ident) is int and ident > 0,
+            f"invalid GitHub repository id for {repository}")
+    return str(ident)
 
 
 def select_releases(manifest, releases):
@@ -663,6 +667,7 @@ def verify_release_provenance(dist, release, trusted_root=None):
     bundle = source_file(dist, BUNDLE_NAME)
     expected = {name: hash_file(source_file(dist, name))
                 for name in ("measurements.json", archive_name(release))}
+    repository_id = github_repository_id(TRUSTBASE_REPO)
     timestamps = []
     for name in expected:
         for item in verify_attestation(dist / name, bundle, release["version"], release["source_revision"],
@@ -671,9 +676,8 @@ def verify_release_provenance(dist, release, trusted_root=None):
             subjects = {s["name"]: s["digest"]["sha256"] for s in verification["statement"]["subject"]}
             require(subjects == expected, f"{name}: attestation subjects differ from the release payloads")
             certificate = verification["signature"]["certificate"]
-            if TRUSTBASE_REPOSITORY_ID is not None:
-                require(certificate.get("sourceRepositoryIdentifier") == str(TRUSTBASE_REPOSITORY_ID),
-                        f"{name}: attestation was issued for another repository id")
+            require(certificate.get("sourceRepositoryIdentifier") == repository_id,
+                    f"{name}: attestation was issued for another repository id")
             stamps = verification.get("verifiedTimestamps") or []
             require(stamps, f"{name}: attestation has no verified signing timestamp")
             timestamps.extend(parse_timestamp(stamp.get("timestamp")) for stamp in stamps)

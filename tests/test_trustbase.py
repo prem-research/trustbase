@@ -251,6 +251,15 @@ class ResolutionTests(Workspace):
             self.assertEqual(len(gh.releases()), 101)
         self.assertIn("page=2", api.call_args_list[1].args[0])
 
+    def test_repository_id_comes_from_github(self):
+        with patch.object(t.GitHub, "api", return_value={"id": 12345}) as api:
+            self.assertEqual(t.github_repository_id(t.TRUSTBASE_REPO), "12345")
+            api.assert_called_once_with("repos/prem-research/trustbase")
+        for response in ({}, {"id": "12345"}, {"id": 0}):
+            with patch.object(t.GitHub, "api", return_value=response), \
+                    self.assertRaisesRegex(t.Error, "invalid GitHub repository id"):
+                t.github_repository_id(t.TRUSTBASE_REPO)
+
     def test_tag_dereference(self):
         gh = t.GitHub()
         with patch.object(gh, "api", side_effect=[
@@ -358,6 +367,12 @@ class ResolutionTests(Workspace):
 
 
 class PackagingTests(Workspace):
+    def setUp(self):
+        super().setUp()
+        lookup = patch.object(t, "github_repository_id", return_value="12345")
+        lookup.start()
+        self.addCleanup(lookup.stop)
+
     def test_legacy_cpu_and_unified_gpu_can_share_a_release(self):
         self.gh = FakeGitHub(("v0.1.6", "v0.3.13"))
         self.change_manifest(lambda m: m["profiles"][0]["podvm"].update(version="0.1.6"))
@@ -621,10 +636,11 @@ class PackagingTests(Workspace):
                             ("--source-ref", "refs/tags/v1.0.0"), ("--source-digest", "a" * 40),
                             ("--bundle", str(t.source_file(dist, t.BUNDLE_NAME)))):
             self.assertEqual(command[command.index(flag) + 1], value)
-        with verifier(good), patch.object(t, "TRUSTBASE_REPOSITORY_ID", 12345):
-            t.verify_package(dist, require_provenance=True)
-        with verifier(good), patch.object(t, "TRUSTBASE_REPOSITORY_ID", 999):
+        with verifier(good), patch.object(t, "github_repository_id", return_value="999"):
             with self.assertRaisesRegex(t.Error, "another repository id"):
+                t.verify_package(dist, require_provenance=True)
+        with verifier(good), patch.object(t, "github_repository_id", side_effect=t.Error("GitHub unavailable")):
+            with self.assertRaisesRegex(t.Error, "GitHub unavailable"):
                 t.verify_package(dist, require_provenance=True)
         with verifier(good), self.assertRaisesRegex(t.Error, "signing event is .* old"):
             t.verify_package(dist, require_provenance=True, max_age=1)

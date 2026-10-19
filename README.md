@@ -99,12 +99,12 @@ workload, removes the superseded file, and runs the admission gate. Revoked
 digests are refused before import; a candidate that is already registered is
 acknowledged without a second import.
 
-`TRUSTBASE_ADMISSION_MODE` (repository variable, default `dry-run`) decides what a
-passing candidate becomes. In `dry-run` the would-be release is resolved,
-packaged, verified, and uploaded as a workflow artifact; nothing is pushed. In
-`publish`, a separate job commits the import and pushes it together with the next
-`vX.Y.Z` tag in one atomic push after the preceding tag has a published release;
-the tag push starts the ordinary release
+The pipeline is the dry run: the prepare job resolves, packages, and verifies the
+would-be release and uploads it with the admission report as a workflow
+artifact. Only when every check passed, and only for events sent by the
+configured fleet dispatcher, does a separate publish job commit the import and
+push it together with the next `vX.Y.Z` tag in one atomic push, after the
+preceding tag has a published release. The tag push starts the ordinary release
 workflow, which reruns every check before signing. A failed check publishes
 nothing. The selected ownership and submission flow is described in
 [docs/policy-source-plan.md](docs/policy-source-plan.md).
@@ -303,9 +303,9 @@ With `--require-provenance`, `verify` runs `gh attestation verify --bundle` for
 both payloads against this repository, its `release.yml` signer workflow, the
 release tag, and the source commit recorded in the catalog; it then requires the
 statement's subjects to be exactly the two payloads with their digests, requires a
-verified signing timestamp, and compares the certificate's stable repository
-identifier with `TRUSTBASE_REPOSITORY_ID` once that constant is set. `--max-age`
-bounds the age of that signing event (the Rekor integration time on a public
+verified signing timestamp, and compares the certificate's repository ID with
+the current ID fetched from GitHub. `--require-provenance` needs GitHub API access.
+`--max-age` bounds the age of that signing event (the Rekor integration time on a public
 repository), `--min-version` rejects older releases, and `--previous-dist` checks
 that the catalog chains to a given predecessor. Without `--require-provenance` the
 command checks only internal consistency and upstream PodVM provenance.
@@ -324,8 +324,8 @@ snapshot, and recorded release metadata. `package` never consults GitHub's
 release list; it verifies saved attestation bundles and regenerates the outputs.
 Tar metadata, file ordering, and gzip headers are normalized.
 
-For fully offline verification, obtain Sigstore roots from a trusted environment
-before disconnecting:
+For offline checks of the packaged inputs and upstream attestations, obtain
+Sigstore roots from a trusted environment before disconnecting:
 
 ~~~sh
 gh attestation trusted-root > trusted-root.jsonl
@@ -359,10 +359,54 @@ predecessor is still the latest published release. If another release wins the
 race, the stale tag run fails and must be rerun to rebuild its chain link.
 
 The admission workflow is the only path that writes to `main` without a pull
-request, and only in `publish` mode. It relies on two GitHub Apps (a read-only
-reader on the fleet repository and a release App with write access here),
-rulesets that make the release App the only bypass actor for `main` and `v*` tags,
-and code-owner review for everyone else.
+request, and only after every check in its prepare job has passed for an event
+from the configured fleet dispatcher. It relies on three GitHub Apps (a read-only
+reader on the fleet repository, a release App with write access here, and the
+fleet's dispatcher) and rulesets that make the release App the only bypass actor
+for `main` and `v*` tags.
+
+### Setup checklist
+
+1. Create three GitHub Apps in the organization (Settings → Developer settings →
+   GitHub Apps). Disable their webhooks and limit installation to this organization.
+   Install each with **Only select repositories**:
+
+   | App | Contents permission | Install on | Store private key in |
+   |---|---|---|---|
+   | `trustbase-fleet-reader` | Read | `coco-fleet` | trustbase repository secrets |
+   | `trustbase-release-bot` | Read and write | `trustbase` | trustbase `release` environment secrets |
+   | `trustbase-dispatcher` | Read and write | `trustbase` | coco-fleet repository secrets |
+
+   The dispatcher needs write access to send `repository_dispatch`; only the
+   release bot may bypass branch and tag rulesets.
+
+2. In trustbase, set repository variables `TRUSTBASE_READER_APP_ID` and
+   `TRUSTBASE_RELEASE_APP_ID`, and repository secret
+   `TRUSTBASE_READER_APP_PRIVATE_KEY`. Create a `release` environment with secret
+   `TRUSTBASE_RELEASE_APP_PRIVATE_KEY`, deployment access limited to `main`, a
+   zero wait timer, and self-review prevention. Require one or two reviewers
+   while the flow is new.
+
+3. Set repository variable `TRUSTBASE_FLEET_DISPATCH_ACTOR` to
+   `trustbase-dispatcher[bot]`. Events from any other sender cannot publish.
+   Remove the environment reviewers when publication is ready to run unattended.
+
+4. Add two rulesets: on `main`, block deletion and force pushes and require a PR
+   with one approval and the "Build and verify release candidate" check; on `v*`
+   tags, restrict creation, updates, and deletion. Give only the
+   `trustbase-release-bot` App an **always** bypass on both.
+
+5. Allow this repository in the `arc-runners` runner group. Enable **Allow public
+   repositories** before making it public. Set Pages source to **GitHub Actions**
+   and allow `v*` tags in the `github-pages` environment's deployment rules.
+
+6. Make the repository public before the first chained release so signing uses
+   public Rekor.
+
+In coco-fleet, `check.yml` already uses `FLEET_DISPATCH_APP_CLIENT_ID` and
+`FLEET_DISPATCH_APP_PRIVATE_KEY` to mint a token scoped to `trustbase` with
+`contents: write` and send the dispatch on pushes to `main`. Its README has the
+App creation steps under "Submit to Trustbase, Setup".
 
 After a successful release publication, a separate job deploys the identical
 `measurements.json` and `provenance.sigstore.json` to GitHub Pages. Each

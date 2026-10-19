@@ -2,9 +2,9 @@ name: Admit Init-Data candidate
 
 # Fleet merges send `repository_dispatch` events of type `init-data-candidate` naming a candidate
 # TOML committed on fleet main. This workflow always runs the code on Trustbase's default branch,
-# fetches the exact candidate, runs the admission gate, and packages the would-be release. With
-# TRUSTBASE_ADMISSION_MODE=publish, a separate job applies the validated change and pushes the
-# import commit plus the next vX.Y.Z tag through the release bot App. The default is dry-run.
+# fetches the exact candidate, runs the admission gate, and packages the would-be release. When
+# every check passes, a separate job applies the validated change and pushes the import commit
+# plus the next vX.Y.Z tag through the release bot App; a failed check publishes nothing.
 
 on:
   repository_dispatch:
@@ -104,7 +104,6 @@ jobs:
   publish:
     name: Publish the validated candidate
     if: >-
-      vars.TRUSTBASE_ADMISSION_MODE == 'publish' &&
       needs.prepare.outputs.changed == 'true' &&
       github.actor == vars.TRUSTBASE_FLEET_DISPATCH_ACTOR
     needs: prepare

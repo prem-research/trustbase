@@ -50,12 +50,8 @@ def check():
     t.require("previous" in catalog["release"] and "revoked" in catalog,
               "release candidate lacks the previous/revoked chain fields")
     t.require(catalog["workloads"], "cannot publish an empty catalog")
-    if t.TRUSTBASE_REPOSITORY_ID is None:
-        print("trustbase release: warning: TRUSTBASE_REPOSITORY_ID is unset; repository id not checked",
-              file=sys.stderr)
-    else:
-        t.require(os.environ.get("GITHUB_REPOSITORY_ID") == str(t.TRUSTBASE_REPOSITORY_ID),
-                  "workflow is running in an unexpected repository")
+    t.require(os.environ.get("GITHUB_REPOSITORY_ID") == t.github_repository_id(repository),
+              "workflow is running in an unexpected repository")
     endpoint = f"https://api.github.com/repos/{repository}/releases/tags/{urllib.parse.quote(version)}"
     request = urllib.request.Request(endpoint, headers={
         "Authorization": "Bearer " + os.environ["GH_TOKEN"],
