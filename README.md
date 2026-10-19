@@ -103,7 +103,8 @@ acknowledged without a second import.
 passing candidate becomes. In `dry-run` the would-be release is resolved,
 packaged, verified, and uploaded as a workflow artifact; nothing is pushed. In
 `publish`, a separate job commits the import and pushes it together with the next
-`vX.Y.Z` tag in one atomic push; the tag push starts the ordinary release
+`vX.Y.Z` tag in one atomic push after the preceding tag has a published release;
+the tag push starts the ordinary release
 workflow, which reruns every check before signing. A failed check publishes
 nothing. The selected ownership and submission flow is described in
 [docs/policy-source-plan.md](docs/policy-source-plan.md).
@@ -343,7 +344,7 @@ PRs, pushes to `main`, and manual dispatch run validation, offline tests, the
 admission gate with the pinned evaluator, Kata conformance (including a check that
 the evaluator's regorus revision equals the one in Kata's lockfile), live
 CPU/NVIDIA integration, a download and verification of the latest published
-release, and packaging on ordinary Ubuntu runners. Actions and toolchains are
+release, and packaging on the `arc-runners` runner group. Actions and toolchains are
 pinned. No confidential hardware or KVM is required. Empty production catalogs
 produce empty preview catalogs so bootstrap CI remains usable.
 
@@ -353,6 +354,9 @@ payloads, attaches the resulting bundle as `provenance.sigstore.json`, verifies 
 signed three-file set with `--require-provenance`, creates a draft release, then
 publishes it. Existing releases, including interrupted drafts, are rejected; assets
 are never clobbered. Publication uses only `GITHUB_TOKEN` and GitHub OIDC.
+Tag workflows queue behind one another, and publication checks that its
+predecessor is still the latest published release. If another release wins the
+race, the stale tag run fails and must be rerun to rebuild its chain link.
 
 The admission workflow is the only path that writes to `main` without a pull
 request, and only in `publish` mode. It relies on two GitHub Apps (a read-only
@@ -365,5 +369,5 @@ After a successful release publication, a separate job deploys the identical
 successful tag deployment replaces those files; use the immutable release assets
 when pinning a particular version.
 
-Main pushes and manual runs do not publish. Tag jobs are serialized per tag and
-are never cancelled by a newer run of the same tag.
+Main pushes and manual runs do not publish. All tag runs are serialized and
+queued; none is cancelled by a later tag.

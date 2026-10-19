@@ -11,8 +11,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: trustbase-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+  # A tag run must finish before the next tag downloads its predecessor.
+  group: trustbase-${{ github.ref_type == 'tag' && 'release' || github.event.pull_request.number || github.ref }}
+  queue: max
+  cancel-in-progress: false
 
 env:
   PYTHONUNBUFFERED: "1"
@@ -20,12 +22,19 @@ env:
 jobs:
   generate:
     name: Build and verify release candidate
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: arc-runners
     timeout-minutes: 20
     permissions:
       contents: read
       attestations: read
     steps:
+      - name: Install checkout dependencies
+        run: |
+          elevate=()
+          if (( EUID != 0 )); then elevate=(sudo -n); fi
+          "${elevate[@]}" apt-get update
+          "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl git make tar
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -39,8 +48,10 @@ jobs:
           bash .github/scripts/install-gh.sh
       - name: Validate authoring inputs and run offline tests
         run: make validate test
-      - name: Install the Rust toolchain pinned by the admission evaluator
-        run: rustup toolchain install "$(python -c 'import tomllib;print(tomllib.load(open("tools/kata-policy-eval/rust-toolchain.toml","rb"))["toolchain"]["channel"])')" --profile minimal
+      - name: Install the admission evaluator's Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: "1.95"
       - name: Cache the admission evaluator build
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -105,13 +116,20 @@ jobs:
     name: Publish GitHub release
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: generate
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: arc-runners
     timeout-minutes: 15
     permissions:
       contents: write
       id-token: write
       attestations: write
     steps:
+      - name: Install checkout dependencies
+        run: |
+          elevate=()
+          if (( EUID != 0 )); then elevate=(sudo -n); fi
+          "${elevate[@]}" apt-get update
+          "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl git make tar
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -162,7 +180,8 @@ jobs:
     name: Deploy measurements to GitHub Pages
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: publish
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: arc-runners
     timeout-minutes: 15
     permissions:
       contents: read

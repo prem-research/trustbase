@@ -68,6 +68,13 @@ def check():
         exc.close()
         if exc.code != 404:
             raise t.Error(f"cannot check release existence: HTTP {exc.code}") from exc
+    tags = published_releases(repository)
+    latest = max(tags, key=lambda value: t.Version(value[1:])) if tags else None
+    previous = catalog["release"]["previous"]
+    linked = previous["version"] if previous is not None else None
+    t.require(linked == latest,
+              f"release candidate links to {linked or 'no release'}, but latest published release is "
+              f"{latest or 'none'}; rebuild this tag before publishing")
     return version, repository, revision
 
 

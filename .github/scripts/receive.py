@@ -17,6 +17,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -135,6 +136,44 @@ def next_tag(repository, token):
     latest = max(tags, key=lambda name: t.Version(name[1:]))
     version = t.Version(latest[1:])
     return f"v{version.major}.{version.minor}.{version.patch + 1}"
+
+
+def latest_published_tag(repository, token):
+    """Find the latest stable release, ignoring drafts and prereleases."""
+    tags = []
+    for page in range(1, 101):
+        batch = t.load_json(api(repository, f"releases?per_page=100&page={page}", token))
+        t.require(isinstance(batch, list), "invalid GitHub release response")
+        tags.extend(item["tag_name"] for item in batch
+                    if not item["draft"] and not item["prerelease"] and
+                    STABLE_TAG.fullmatch(item["tag_name"]))
+        if len(batch) < 100:
+            return max(tags, key=lambda name: t.Version(name[1:])) if tags else None
+    raise t.Error("GitHub release pagination limit exceeded")
+
+
+def await_predecessor(timeout=2700, interval=15):
+    """Wait until the release behind this prepared patch is public before minting another tag."""
+    prepared = t.load_json((OUTPUT / "prepared.json").read_bytes())
+    repository = os.environ["GITHUB_REPOSITORY"]
+    t.require(prepared["repository"] == repository, "prepared change belongs to another repository")
+    deadline = time.monotonic() + timeout
+    while True:
+        latest = latest_published_tag(repository, os.environ["GH_TOKEN"])
+        if latest is None:
+            expected = "v1.0.0"
+        else:
+            version = t.Version(latest[1:])
+            expected = f"v{version.major}.{version.minor}.{version.patch + 1}"
+        if expected == prepared["tag"]:
+            t.require(next_tag(repository, os.environ["GH_TOKEN"]) == prepared["tag"],
+                      "a different stable tag was created while admission waited")
+            return
+        t.require(t.Version(expected[1:]) < t.Version(prepared["tag"][1:]),
+                  "a newer release already supersedes the prepared tag")
+        t.require(time.monotonic() < deadline,
+                  f"timed out waiting for the release before {prepared['tag']}")
+        time.sleep(interval)
 
 
 def candidate_release(root, version, revision, previous):
@@ -258,6 +297,8 @@ if __name__ == "__main__":
             main()
         elif sys.argv[1:] == ["apply-prepared"]:
             apply_prepared()
+        elif sys.argv[1:] == ["await-predecessor"]:
+            await_predecessor()
         elif sys.argv[1:] == ["publish-prepared"]:
             publish_prepared()
         else:
