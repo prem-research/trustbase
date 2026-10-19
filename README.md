@@ -377,6 +377,10 @@ for `main` and `v*` tags.
    | `trustbase-release-bot` | Read and write | `trustbase` | trustbase `release` environment secrets |
    | `trustbase-dispatcher` | Read and write | `trustbase` | coco-fleet repository secrets |
 
+   In Trustbase, set `TRUSTBASE_READER_APP_ID` and `TRUSTBASE_RELEASE_APP_ID` to
+   their Apps' numeric **App IDs**.
+   In coco-fleet, set `FLEET_DISPATCH_APP_CLIENT_ID` to the dispatcher's **Client ID**.
+
    The dispatcher needs write access to send `repository_dispatch`; only the
    release bot may bypass branch and tag rulesets.
 
