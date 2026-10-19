@@ -272,10 +272,19 @@ allow_anno_key_value(i_key, i_value, p_container) if {
 allow_anno_key_value(i_key, i_value, p_container) if {
     print("allow_anno_key_value 2: i key =", i_key)
 
+    not startswith(i_key, "cdi.k8s.io/")
     some p_key, _ in p_container.OCI.Annotations
     p_key == i_key
 
     print("allow_anno_key_value 2: true")
+}
+allow_anno_key_value(i_key, i_value, p_container) if {
+    print("allow_anno_key_value 2 cdi: i key =", i_key, "i_value =", i_value)
+
+    startswith(i_key, "cdi.k8s.io/")
+    p_container.OCI.Annotations[i_key] == i_value
+
+    print("allow_anno_key_value 2 cdi: true")
 }
 allow_anno_key_value(i_key, i_value, p_container) if {
     print("allow_anno_key_value 3: i key =", i_key, "i_value =", i_value)
@@ -1120,6 +1129,7 @@ allow_mount(p_oci, i_mount, i_storages, bundle_id, sandbox_id):= p_index if {
     some p_index, p_mount in p_oci.Mounts
 
     print("allow_mount 1: p_mount =", p_mount)
+    p_mount.source != ""
     check_mount(p_mount, i_mount, bundle_id, sandbox_id)
 
     print("allow_mount 1: true, p_index =", p_index)
@@ -1133,10 +1143,12 @@ allow_mount(p_oci, i_mount, i_storages, bundle_id, sandbox_id):= p_index if {
     p_mount.destination == i_mount.destination
     p_mount.type_ == i_mount.type_
     p_mount.options == i_mount.options
+    p_mount.source == ""
 
     some i_storage in i_storages
     print("allow_mount 2: i_storage =", i_storage)
 
+    i_storage.driver in {"blk", "scsi"}
     i_storage.mount_point == i_mount.source
 
     print("allow_mount 2: true, p_index =", p_index)
