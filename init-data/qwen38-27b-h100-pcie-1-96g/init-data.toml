@@ -386,6 +386,7 @@ allow_by_container_type(i_cri_type, p_oci, i_oci, s_name, s_namespace) if {
     i_kata_type == "pod_container"
 
     allow_container_name(p_oci, i_oci)
+    allow_container_annotation(p_oci, i_oci, "io.kubernetes.cri.image-name")
     allow_net_namespace(p_oci, i_oci)
     allow_log_directory(p_oci, i_oci)
 
@@ -1271,7 +1272,8 @@ allow_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
     i_storage.fs_group == null
     i_storage.shared == false
     count(i_storage.options) == 0
-    # TODO: Check Mount Point, Source, Driver Options, etc.
+    i_storage.mount_point == concat("", ["/run/kata-containers/", bundle_id, "/rootfs"])
+    i_storage.source == input.OCI.Annotations["io.kubernetes.cri.image-name"]
     print("allow_storage with image_guest_pull: true")
 }
 allow_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
@@ -1803,8 +1805,6 @@ RemoveContainerRequest:= {"ops": ops, "allowed": true} if {
 allow_vfio_device(p_vfio_devices, i_vfio_device) if {
     print("allow_vfio_device manual 1: start")
 
-    count(p_vfio_devices) == 0
-
     vfio_device_path := policy_data.devices.vfio.device_path
     startswith(i_vfio_device.container_path, vfio_device_path)
     suffix := trim_prefix(i_vfio_device.container_path, vfio_device_path)
@@ -1812,6 +1812,11 @@ allow_vfio_device(p_vfio_devices, i_vfio_device) if {
 
     i_vfio_device.id == concat("", ["vfio", suffix])
     i_vfio_device.type_ == "vfio-pci-gk"
+    i_vfio_device.vm_path == ""
+    count(i_vfio_device.options) > 0
+    every option in i_vfio_device.options {
+        regex.match(VFIO_PCI_ADDRESS_REGEX, option)
+    }
 
     print("allow_vfio_device manual 1: true")
 }
@@ -1819,48 +1824,17 @@ allow_vfio_device(p_vfio_devices, i_vfio_device) if {
 allow_vfio_device_cdi_correlation(p_vfio_devices, i_vfio_devices, i_oci) if {
     print("allow_vfio_device_cdi_correlation manual 1: start")
 
-    count(p_vfio_devices) == 0
+    gpu_entries := split(i_oci.Annotations["cdi.k8s.io/gpu"], ",")
+    every entry in gpu_entries {
+        regex.match("^nvidia\\.com/(gpu|pgpu)=[0-9]+$", entry)
+    }
+    count(i_vfio_devices) <= count(gpu_entries)
 
     every i_vfio_device in i_vfio_devices {
         allow_vfio_device(p_vfio_devices, i_vfio_device)
     }
 
     print("allow_vfio_device_cdi_correlation manual 1: true")
-}
-
-allow_sandbox_storage(p_storages, i_storage) if {
-    print("allow_sandbox_storage modelmount manual: start")
-    print("allow_sandbox_storage modelmount manual: i_storage =", i_storage)
-
-    stub := concat("", [policy_data.common.spath, "/", base64url.encode(i_storage.source)])
-    stub == i_storage.mount_point
-
-    print("allow_sandbox_storage modelmount manual: true")
-}
-
-allow_storages(p_storages, i_storages, bundle_id, sandbox_id) if {
-    print("allow_storages modelmount manual: start")
-    p_count := count(p_storages)
-    i_count := count(i_storages)
-    img_pull_count := count([s | s := i_storages[_]; s.driver == "image_guest_pull"])
-    mpk_model_count := count([s | s := i_storages[_]; s.driver == "scsi"; s.fstype == "bind"; s.options == ["rbind", "rprivate", "ro"]; s.shared == false; regex.match("^/run/kata-containers/sandbox/storage/[A-Za-z0-9+/=_-]+$", s.mount_point)])
-    print("allow_storages modelmount manual: p_count =", p_count, "i_count =", i_count, "mpk_model_count =", mpk_model_count)
-    mpk_model_count == 1
-    p_count == i_count - img_pull_count - mpk_model_count
-    every i_storage in i_storages {
-        allow_storage(p_storages, i_storage, bundle_id, sandbox_id)
-    }
-    print("allow_storages modelmount manual: true")
-}
-
-allow_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
-    print("allow_storage modelmount manual: start")
-    i_storage.driver == "scsi"
-    i_storage.fstype == "bind"
-    i_storage.options == ["rbind", "rprivate", "ro"]
-    i_storage.shared == false
-    regex.match("^/run/kata-containers/sandbox/storage/[A-Za-z0-9+/=_-]+$", i_storage.mount_point)
-    print("allow_storage modelmount manual: true")
 }
 
 policy_data := {
@@ -2054,297 +2028,7 @@ policy_data := {
             "UID": 0,
             "GID": 0,
             "AdditionalGids": [
-              0,
-              10
-            ],
-            "Username": ""
-          },
-          "Args": [
-            "/bin/sh",
-            "-c",
-            "timeout 30 ntpd -n -q -d -p time.google.com -p time.cloudflare.com -p pool.ntp.org || echo \"clock-sync failed, continuing\""
-          ],
-          "Env": [
-            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "HOSTNAME=$(host-name)"
-          ],
-          "Cwd": "/",
-          "Capabilities": {
-            "Ambient": [],
-            "Bounding": [
-              "CAP_CHOWN",
-              "CAP_DAC_OVERRIDE",
-              "CAP_FSETID",
-              "CAP_FOWNER",
-              "CAP_MKNOD",
-              "CAP_NET_RAW",
-              "CAP_SETGID",
-              "CAP_SETUID",
-              "CAP_SETFCAP",
-              "CAP_SETPCAP",
-              "CAP_NET_BIND_SERVICE",
-              "CAP_SYS_CHROOT",
-              "CAP_KILL",
-              "CAP_AUDIT_WRITE",
-              "CAP_SYS_TIME"
-            ],
-            "Effective": [
-              "CAP_CHOWN",
-              "CAP_DAC_OVERRIDE",
-              "CAP_FSETID",
-              "CAP_FOWNER",
-              "CAP_MKNOD",
-              "CAP_NET_RAW",
-              "CAP_SETGID",
-              "CAP_SETUID",
-              "CAP_SETFCAP",
-              "CAP_SETPCAP",
-              "CAP_NET_BIND_SERVICE",
-              "CAP_SYS_CHROOT",
-              "CAP_KILL",
-              "CAP_AUDIT_WRITE",
-              "CAP_SYS_TIME"
-            ],
-            "Inheritable": [],
-            "Permitted": [
-              "CAP_CHOWN",
-              "CAP_DAC_OVERRIDE",
-              "CAP_FSETID",
-              "CAP_FOWNER",
-              "CAP_MKNOD",
-              "CAP_NET_RAW",
-              "CAP_SETGID",
-              "CAP_SETUID",
-              "CAP_SETFCAP",
-              "CAP_SETPCAP",
-              "CAP_NET_BIND_SERVICE",
-              "CAP_SYS_CHROOT",
-              "CAP_KILL",
-              "CAP_AUDIT_WRITE",
-              "CAP_SYS_TIME"
-            ]
-          },
-          "NoNewPrivileges": false
-        },
-        "Root": {
-          "Path": "$(root_path)",
-          "Readonly": true
-        },
-        "Mounts": [
-          {
-            "destination": "/proc",
-            "source": "proc",
-            "type_": "proc",
-            "options": [
-              "nosuid",
-              "noexec",
-              "nodev"
-            ]
-          },
-          {
-            "destination": "/dev",
-            "source": "tmpfs",
-            "type_": "tmpfs",
-            "options": [
-              "nosuid",
-              "strictatime",
-              "mode=755",
-              "size=65536k"
-            ]
-          },
-          {
-            "destination": "/dev/pts",
-            "source": "devpts",
-            "type_": "devpts",
-            "options": [
-              "nosuid",
-              "noexec",
-              "newinstance",
-              "ptmxmode=0666",
-              "mode=0620",
-              "gid=5"
-            ]
-          },
-          {
-            "destination": "/dev/shm",
-            "source": "/run/kata-containers/sandbox/shm",
-            "type_": "bind",
-            "options": [
-              "rbind"
-            ]
-          },
-          {
-            "destination": "/dev/mqueue",
-            "source": "mqueue",
-            "type_": "mqueue",
-            "options": [
-              "nosuid",
-              "noexec",
-              "nodev"
-            ]
-          },
-          {
-            "destination": "/sys",
-            "source": "sysfs",
-            "type_": "sysfs",
-            "options": [
-              "nosuid",
-              "noexec",
-              "nodev",
-              "ro"
-            ]
-          },
-          {
-            "destination": "/sys/fs/cgroup",
-            "source": "cgroup",
-            "type_": "cgroup",
-            "options": [
-              "nosuid",
-              "noexec",
-              "nodev",
-              "relatime",
-              "ro"
-            ]
-          },
-          {
-            "destination": "/etc/hosts",
-            "source": "$(sfprefix)hosts$",
-            "type_": "bind",
-            "options": [
-              "rbind",
-              "rprivate",
-              "rw"
-            ]
-          },
-          {
-            "destination": "/dev/termination-log",
-            "source": "$(sfprefix)termination-log$",
-            "type_": "bind",
-            "options": [
-              "rbind",
-              "rprivate",
-              "rw"
-            ]
-          },
-          {
-            "destination": "/etc/hostname",
-            "source": "$(sfprefix)hostname$",
-            "type_": "bind",
-            "options": [
-              "rbind",
-              "rprivate",
-              "ro"
-            ]
-          },
-          {
-            "destination": "/etc/resolv.conf",
-            "source": "$(sfprefix)resolv.conf$",
-            "type_": "bind",
-            "options": [
-              "rbind",
-              "rprivate",
-              "ro"
-            ]
-          },
-          {
-            "destination": "/var/run/secrets/kubernetes.io/serviceaccount",
-            "source": "$(sfprefix)serviceaccount$",
-            "type_": "bind",
-            "options": [
-              "rbind",
-              "rprivate",
-              "ro"
-            ]
-          },
-          {
-            "destination": "/var/run/secrets/azure/tokens",
-            "source": "$(sfprefix)tokens$",
-            "type_": "bind",
-            "options": [
-              "rbind",
-              "rprivate",
-              "ro"
-            ]
-          }
-        ],
-        "Annotations": {
-          "cdi.k8s.io/gpu": "nvidia.com/pgpu=0",
-          "io.katacontainers.config.hypervisor.cold_plug_vfio": "root-port",
-          "io.katacontainers.config.hypervisor.default_memory": "98304",
-          "io.katacontainers.config.hypervisor.default_vcpus": "8",
-          "io.katacontainers.config.hypervisor.kernel_params": "cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1 agent.visible_cdi_devices=true",
-          "io.katacontainers.config.hypervisor.machine_type": "q35",
-          "io.katacontainers.pkg.oci.bundle_path": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/$(bundle-id)",
-          "io.katacontainers.pkg.oci.container_type": "pod_container",
-          "io.kubernetes.cri.container-name": "clock-sync",
-          "io.kubernetes.cri.container-type": "container",
-          "io.kubernetes.cri.image-name": "docker.io/library/busybox:1.37.0@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e",
-          "io.kubernetes.cri.sandbox-id": "^[a-z0-9]{64}$",
-          "io.kubernetes.cri.sandbox-name": "^vllm-qwen38-27b-[bcdfghjklmnpqrstvwxz2456789]+-[bcdfghjklmnpqrstvwxz2456789]+$",
-          "io.kubernetes.cri.sandbox-namespace": "coco-poc",
-          "org.prem.podvmtype": "h100-pcie-1-96g"
-        },
-        "Linux": {
-          "Namespaces": [
-            {
-              "Type": "ipc",
-              "Path": ""
-            },
-            {
-              "Type": "uts",
-              "Path": ""
-            },
-            {
-              "Type": "mount",
-              "Path": ""
-            }
-          ],
-          "MaskedPaths": [
-            "/proc/acpi",
-            "/proc/kcore",
-            "/proc/keys",
-            "/proc/latency_stats",
-            "/proc/timer_list",
-            "/proc/timer_stats",
-            "/proc/sched_debug",
-            "/proc/scsi",
-            "/sys/firmware"
-          ],
-          "ReadonlyPaths": [
-            "/proc/asound",
-            "/proc/bus",
-            "/proc/fs",
-            "/proc/irq",
-            "/proc/sys",
-            "/proc/sysrq-trigger"
-          ],
-          "Devices": [],
-          "Sysctl": {
-            "net.ipv4.ip_unprivileged_port_start": "0",
-            "net.ipv4.ping_group_range": "0 2147483647"
-          }
-        }
-      },
-      "storages": [],
-      "devices": [],
-      "sandbox_pidns": false,
-      "exec_commands": [],
-      "runtime_anno_patterns": {
-        "^io\\.kubernetes\\.container\\.terminationMessagePath$": "^/.*$",
-        "^io\\.kubernetes\\.container\\.terminationMessagePolicy$": "^(File|FallbackToLogsOnError)$"
-      }
-    },
-    {
-      "OCI": {
-        "Version": "1.3.0",
-        "Process": {
-          "Terminal": false,
-          "User": {
-            "UID": 0,
-            "GID": 0,
-            "AdditionalGids": [
-              0,
-              10
+              0
             ],
             "Username": ""
           },
@@ -2353,7 +2037,7 @@ policy_data := {
             "-o",
             "pipefail",
             "-c",
-            "vllm serve /models/model --host 0.0.0.0 --port 8000 --served-model-name qwen38-27b --trust-remote-code --kv-cache-dtype fp8 --gpu-memory-utilization 0.90 --max-model-len 262144 --max-num-seqs 128 --max-num-batched-tokens 16384 --enable-prefix-caching --enable-prompt-tokens-details --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":3}' >/dev/null 2>&1"
+            "vllm serve /models/model --host 0.0.0.0 --port 8000 --served-model-name qwen38-27b --trust-remote-code --kv-cache-dtype fp8 --gpu-memory-utilization 0.90 --max-model-len 262144 --max-num-seqs 128 --max-num-batched-tokens 16384 --enable-prefix-caching --enable-prompt-tokens-details --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":3}' 2>&1 | tee /dev/termination-log"
           ],
           "Env": [
             "PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -2543,7 +2227,7 @@ policy_data := {
           },
           {
             "destination": "/models/model",
-            "source": "/dev/disk/by-uuid/07074027-62a4-548d-bbf6-3ba2f85aa868",
+            "source": "^/run/kata-containers/sandbox/storage/[A-Za-z0-9_-]+={0,2}$",
             "type_": "bind",
             "options": [
               "rbind",
@@ -2699,6 +2383,20 @@ policy_data := {
           "mount_point": "$(spath)/$(b64_device_id)",
           "fs_group": null,
           "shared": true
+        },
+        {
+          "driver": "",
+          "driver_options": [],
+          "source": "",
+          "fstype": "bind",
+          "options": [
+            "rbind",
+            "rprivate",
+            "ro"
+          ],
+          "mount_point": "$(spath)/$(b64_device_id)",
+          "fs_group": null,
+          "shared": false
         }
       ],
       "devices": [
@@ -2727,15 +2425,12 @@ policy_data := {
             "UID": 0,
             "GID": 0,
             "AdditionalGids": [
-              0,
-              10
+              0
             ],
             "Username": ""
           },
           "Args": [
-            "/bin/sh",
-            "-c",
-            "exec /entrypoint.sh >/dev/null 2>&1"
+            "/entrypoint.sh"
           ],
           "Env": [
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -3154,5 +2849,4 @@ policy_data := {
     "info": "e7cec31fdaaec82c8b489f56d0baf61fa132a9c90df716a6f7a1f20486611fe9_30890065920_07074027-62a4-548d-bbf6-3ba2f85aa868"
   }
 ]
-
 '''

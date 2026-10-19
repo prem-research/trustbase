@@ -119,16 +119,27 @@ def initdata(raw, workload_id):
         doc = tomllib.loads(raw.decode("utf-8"))
     except (UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise Error(f"{workload_id}: invalid UTF-8 TOML: {exc}") from exc
-    require(set(doc) == {"version", "algorithm", "data"},
-            f"{workload_id}: Init-Data requires only version, algorithm, and data")
-    require(doc["version"] == "0.1.0", f"{workload_id}: unsupported Init-Data version")
-    require(doc["algorithm"] in ("sha256", "sha384", "sha512"),
-            f"{workload_id}: unsupported Init-Data algorithm")
-    require(isinstance(doc["data"], dict) and
-            all(isinstance(v, str) for v in doc["data"].values()),
-            f"{workload_id}: data must be a string-to-string map")
-    require(doc["data"].get("id") == workload_id,
+    check_schema(doc, "initdata.schema.json")
+    require(doc["data"]["id"] == workload_id,
             f"{workload_id}: data.id must exactly match the manifest id")
+    if "model-mounts.json" in doc["data"]:
+        try:
+            mounts = load_json(doc["data"]["model-mounts.json"])
+        except json.JSONDecodeError as exc:
+            raise Error(f"{workload_id}: invalid model-mounts.json: {exc}") from exc
+        check_schema(mounts, "vendor/podvm-model-mounts.schema.json")
+        seen = []
+        for entry in mounts:
+            path = entry["mount_path"]
+            require(not any(p in (".", "..") for p in path.split("/")[1:]),
+                    f"{workload_id}: non-normalized model mount_path: {path}")
+            require(all(path != prev and not path.startswith(prev + "/")
+                        and not prev.startswith(path + "/") for prev in seen),
+                    f"{workload_id}: duplicate or overlapping model mount_path: {path}")
+            seen.append(path)
+            offset = int(entry["info"].split("_")[1])
+            require(0 < offset <= (1 << 62) and offset % 4096 == 0,
+                    f"{workload_id}: invalid hash_offset in model-mounts.json: {offset}")
     digest = hashlib.new(doc["algorithm"], raw).digest()
     return {
         "algorithm": doc["algorithm"],

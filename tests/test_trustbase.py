@@ -191,6 +191,26 @@ class AuthoringTests(Workspace):
         self.assertEqual(long["host_data"], long["digest"][:64])
         self.assertEqual(long["mr_config_id"], long["digest"][:96])
 
+    def test_model_mounts_schema_and_invariants(self):
+        base = (self.root / "init-data/model-router/init-data.toml").read_text()
+        valid_info = "e" * 64 + "_4096_07074027-62a4-548d-bbf6-3ba2f85aa868"
+        valid = base + f'\n"model-mounts.json" = \'\'\'\n[{{"modelid":"org/m@rev","mount_path":"/models/m","info":"{valid_info}"}}]\n\'\'\'\n'
+        self.assertEqual(len(t.initdata(valid.encode(), "model-router")["digest"]), 96)
+        for bad_mounts in (
+            "not-json",
+            "{}",
+            json.dumps([{"modelid": "no-at", "mount_path": "/models/m", "info": valid_info}]),
+            json.dumps([{"modelid": "org/m@rev", "mount_path": "/other/m", "info": valid_info}]),
+            json.dumps([{"modelid": "org/m@rev", "mount_path": "/models/../m", "info": valid_info}]),
+            json.dumps([{"modelid": "org/m@rev", "mount_path": "/models/m",
+                         "info": "e" * 64 + "_100_07074027-62a4-548d-bbf6-3ba2f85aa868"}]),
+            json.dumps([{"modelid": "org/m@rev", "mount_path": "/models/m", "info": valid_info},
+                        {"modelid": "org/m2@rev", "mount_path": "/models/m/sub", "info": valid_info}]),
+        ):
+            raw = (base + f"\n'model-mounts.json' = '''{bad_mounts}'''\n").encode()
+            with self.subTest(bad_mounts=bad_mounts), self.assertRaises(t.Error):
+                t.initdata(raw, "model-router")
+
 
 class ResolutionTests(Workspace):
     def test_all_matches_ordering_and_prerelease_exclusion(self):

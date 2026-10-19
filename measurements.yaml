@@ -9,4 +9,4 @@ profiles:
     initdata: init-data/qwen38-27b-h100-pcie-1-96g/init-data.toml
     podvm:
       profile: h100-pcie-1-96g
-      version: "0.3.13"
+      version: "0.3.18"
