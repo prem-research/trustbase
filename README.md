@@ -1,6 +1,6 @@
 # Trustbase
 
-Trustbase publishes complete reference measurements for confidential workloads.
+Trustbase publishes reference measurements for confidential workloads.
 Each workload combines an exact Init-Data TOML with a named
 [prem-research/podvm](https://github.com/prem-research/podvm) launch profile and a
 semver constraint. A release freezes every matching published stable PodVM
@@ -217,30 +217,32 @@ Each release contains exactly three uploaded assets:
 
 | Asset | Contents |
 |---|---|
-| `measurements.json` | Complete references indexed by workload ID |
+| `measurements.json` | Attestation references indexed by workload ID |
 | `trustbase-inputs-<tag>.tar.gz` | Exact source definitions, schemas, resolution lock, upstream assets, and attestation bundles |
 | `SHA256SUMS` | SHA-256 checksums of the two assets above |
 
 GitHub's automatic source archives are separate. Every uploaded asset receives
 a GitHub build-provenance attestation.
 
-The catalog follows `schemas/measurements.schema.json`. At `workloads[<id>]`:
+The catalog follows `schemas/measurements.schema.json` and carries only the
+values a relying party matches against evidence. At `workloads[<id>]`:
 
-- `initdata` records the path, declared algorithm, full digest, and file SHA-256.
-- `podvm` records the repository, selected profile, and original constraint.
-- `references` contains complete records for each selected version and TEE/CPU.
+- `initdata` records the declared algorithm, full digest, and the derived
+  `host_data` and `mr_config_id` registers for the workload.
+- `releases` is keyed by the exact PodVM tag. Each entry has an `snp` map from
+  CPU model to the expected SNP `measurement`, and/or a `tdx` object with
+  `mr_td`, `rtmr_0`, `rtmr_1`, and `rtmr_2`.
 
-Each reference identifies the exact PodVM tag, source commit, measurement-asset
-digest, `podvm_variant` (`cpu` or `nvidia`), the corresponding PodVM bundle
-digest, launch profile, and launch configuration. NVIDIA records also retain
-the profile's `gpu` metadata. The schema binds variant, bundle name, GPU metadata,
-and allowed TEE together. TDX records carry `mr_td`, `rtmr_0`, `rtmr_1`, `rtmr_2`,
-and `mr_config_id` together. SNP records
-carry the CPU model, `measurement`, and `host_data` together.
+Launch configuration, bundle digests, source commits, and upstream catalog
+digests are provenance rather than attestation inputs. They remain available in
+the attested `trustbase-inputs-<tag>.tar.gz` archive and are not repeated in the
+catalog.
 
 A relying party verifies the Trustbase release's provenance, selects the
-**intended** workload ID, and matches all measurement fields of one complete
-record. It must not mix registers from different records or accept an arbitrary
+**intended** workload ID, then selects the release entry and TEE matching the
+evidence and matches every register in that entry. `host_data` and
+`mr_config_id` come from the workload's `initdata` block. The relying party must
+not mix registers from different releases or TEEs, or accept an arbitrary
 workload ID supplied by the prover. The ID is a lookup key; workload enforcement
 depends on the measured guest consuming and enforcing its Init-Data policy and
 model metadata. Evidence signature, freshness, and platform-policy checks remain

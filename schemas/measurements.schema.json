@@ -1,93 +1,12 @@
 {
   "$defs": {
-    "artifact": {
-      "additionalProperties": false,
-      "properties": {
-        "media_type": {
-          "const": "application/zstd"
-        },
-        "name": {
-          "pattern": "^podvm-(nvidia-)?ubuntu-24\\.04-x86_64-[A-Za-z0-9._-]+\\.tar\\.zst$",
-          "type": "string"
-        },
-        "sha256": {
-          "$ref": "#/$defs/sha256"
-        }
-      },
-      "required": [
-        "name",
-        "sha256",
-        "media_type"
-      ],
-      "type": "object"
-    },
-    "cpuArtifact": {
-      "$ref": "#/$defs/artifact",
-      "properties": {
-        "name": {
-          "pattern": "^podvm-ubuntu-"
-        }
-      }
-    },
-    "gpu": {
-      "additionalProperties": false,
-      "properties": {
-        "count": {
-          "enum": [
-            1,
-            8
-          ]
-        },
-        "family": {
-          "enum": [
-            "H100",
-            "H200",
-            "B200",
-            "B300"
-          ]
-        },
-        "nvswitch_count": {
-          "enum": [
-            0,
-            4
-          ]
-        },
-        "platform": {
-          "enum": [
-            "pcie",
-            "pcie-nvlink",
-            "hgx-hopper",
-            "hgx-blackwell"
-          ]
-        }
-      },
-      "required": [
-        "family",
-        "platform",
-        "count",
-        "nvswitch_count"
-      ],
-      "type": "object"
-    },
-    "memory": {
-      "pattern": "^[1-9][0-9]*[MG]$",
+    "sha384": {
+      "pattern": "^[0-9a-f]{96}$",
       "type": "string"
     },
-    "nvidiaArtifact": {
-      "$ref": "#/$defs/artifact",
-      "properties": {
-        "name": {
-          "pattern": "^podvm-nvidia-ubuntu-"
-        }
-      }
-    },
-    "profileId": {
-      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
-      "type": "string"
-    },
-    "sevModels": {
+    "snpMeasurements": {
       "additionalProperties": {
-        "$ref": "#/$defs/snpRecord"
+        "$ref": "#/$defs/sha384"
       },
       "minProperties": 1,
       "propertyNames": {
@@ -95,258 +14,27 @@
       },
       "type": "object"
     },
-    "sha256": {
-      "pattern": "^[0-9a-f]{64}$",
-      "type": "string"
-    },
-    "sha384": {
-      "pattern": "^[0-9a-f]{96}$",
-      "type": "string"
-    },
-    "snpQemu": {
+    "tdxMeasurements": {
       "additionalProperties": false,
       "properties": {
-        "cpu": {
-          "minLength": 1,
-          "type": "string"
+        "mr_td": {
+          "$ref": "#/$defs/sha384"
         },
-        "devices": {
-          "$ref": "#/$defs/stringArray"
+        "rtmr_0": {
+          "$ref": "#/$defs/sha384"
         },
-        "machine": {
-          "minLength": 1,
-          "type": "string"
+        "rtmr_1": {
+          "$ref": "#/$defs/sha384"
         },
-        "netdevs": {
-          "$ref": "#/$defs/stringArray"
-        },
-        "objects": {
-          "$ref": "#/$defs/stringArray"
-        }
-      },
-      "required": [
-        "machine",
-        "cpu",
-        "objects",
-        "netdevs",
-        "devices"
-      ],
-      "type": "object"
-    },
-    "snpRecord": {
-      "additionalProperties": false,
-      "properties": {
-        "configuration": {
-          "additionalProperties": false,
-          "properties": {
-            "cmdline": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "cpus": {
-              "maximum": 255,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "disk": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "firmware": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "guest_features": {
-              "pattern": "^0x[0-9a-f]+$",
-              "type": "string"
-            },
-            "initrd": {
-              "type": "null"
-            },
-            "kernel": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "memory": {
-              "$ref": "#/$defs/memory"
-            },
-            "mode": {
-              "const": "direct"
-            },
-            "qemu": {
-              "$ref": "#/$defs/snpQemu"
-            },
-            "vcpu_type": {
-              "$ref": "#/$defs/vcpuType"
-            },
-            "vmm_type": {
-              "const": "QEMU"
-            }
-          },
-          "required": [
-            "cpus",
-            "memory",
-            "vcpu_type",
-            "vmm_type",
-            "guest_features",
-            "mode",
-            "firmware",
-            "kernel",
-            "initrd",
-            "cmdline",
-            "disk",
-            "qemu"
-          ],
-          "type": "object"
-        },
-        "measurement": {
+        "rtmr_2": {
           "$ref": "#/$defs/sha384"
         }
       },
       "required": [
-        "configuration",
-        "measurement"
-      ],
-      "type": "object"
-    },
-    "stringArray": {
-      "items": {
-        "minLength": 1,
-        "type": "string"
-      },
-      "type": "array"
-    },
-    "tdxQemu": {
-      "additionalProperties": false,
-      "properties": {
-        "accel": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "cpu": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "devices": {
-          "$ref": "#/$defs/stringArray"
-        },
-        "machine": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "netdevs": {
-          "$ref": "#/$defs/stringArray"
-        },
-        "objects": {
-          "$ref": "#/$defs/stringArray"
-        }
-      },
-      "required": [
-        "machine",
-        "cpu",
-        "accel",
-        "objects",
-        "netdevs",
-        "devices"
-      ],
-      "type": "object"
-    },
-    "tdxRecord": {
-      "additionalProperties": false,
-      "properties": {
-        "configuration": {
-          "additionalProperties": false,
-          "properties": {
-            "acpi_distribution": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "cmdline": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "cpus": {
-              "maximum": 255,
-              "minimum": 1,
-              "type": "integer"
-            },
-            "disk": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "firmware": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "initrd": {
-              "type": "null"
-            },
-            "kernel": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "measurement_note": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "memory": {
-              "$ref": "#/$defs/memory"
-            },
-            "mode": {
-              "const": "direct"
-            },
-            "qemu": {
-              "$ref": "#/$defs/tdxQemu"
-            },
-            "qemu_source_version": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "cpus",
-            "memory",
-            "acpi_distribution",
-            "qemu_source_version",
-            "mode",
-            "firmware",
-            "kernel",
-            "initrd",
-            "cmdline",
-            "disk",
-            "qemu",
-            "measurement_note"
-          ],
-          "type": "object"
-        },
-        "measurement": {
-          "additionalProperties": false,
-          "properties": {
-            "mr_td": {
-              "$ref": "#/$defs/sha384"
-            },
-            "rtmr_0": {
-              "$ref": "#/$defs/sha384"
-            },
-            "rtmr_1": {
-              "$ref": "#/$defs/sha384"
-            },
-            "rtmr_2": {
-              "$ref": "#/$defs/sha384"
-            }
-          },
-          "required": [
-            "mr_td",
-            "rtmr_0",
-            "rtmr_1",
-            "rtmr_2"
-          ],
-          "type": "object"
-        }
-      },
-      "required": [
-        "configuration",
-        "measurement"
+        "mr_td",
+        "rtmr_0",
+        "rtmr_1",
+        "rtmr_2"
       ],
       "type": "object"
     },
@@ -397,10 +85,6 @@
         "source_revision"
       ],
       "type": "object"
-    },
-    "resolution_sha256": {
-      "pattern": "^[0-9a-f]{64}$",
-      "type": "string"
     },
     "schema": {
       "format": "uri",
@@ -480,276 +164,63 @@
                 "pattern": "^([0-9a-f]{64}|[0-9a-f]{96}|[0-9a-f]{128})$",
                 "type": "string"
               },
-              "path": {
-                "minLength": 1,
-                "type": "string"
-              },
-              "sha256": {
+              "host_data": {
                 "pattern": "^[0-9a-f]{64}$",
                 "type": "string"
+              },
+              "mr_config_id": {
+                "pattern": "^[0-9a-f]{96}$",
+                "type": "string"
               }
             },
             "required": [
-              "path",
               "algorithm",
               "digest",
-              "sha256"
+              "host_data",
+              "mr_config_id"
             ],
             "type": "object"
           },
-          "podvm": {
-            "additionalProperties": false,
-            "properties": {
-              "profile": {
-                "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
-                "type": "string"
-              },
-              "repository": {
-                "const": "prem-research/podvm"
-              },
-              "version": {
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "repository",
-              "profile",
-              "version"
-            ],
-            "type": "object"
-          },
-          "references": {
-            "items": {
-              "oneOf": [
+          "releases": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "anyOf": [
                 {
-                  "additionalProperties": false,
-                  "properties": {
-                    "configuration": {
-                      "$ref": "#/$defs/tdxRecord/properties/configuration"
-                    },
-                    "measurements": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "mr_config_id": {
-                          "$ref": "#/$defs/sha384"
-                        },
-                        "mr_td": {
-                          "$ref": "#/$defs/sha384"
-                        },
-                        "rtmr_0": {
-                          "$ref": "#/$defs/sha384"
-                        },
-                        "rtmr_1": {
-                          "$ref": "#/$defs/sha384"
-                        },
-                        "rtmr_2": {
-                          "$ref": "#/$defs/sha384"
-                        }
-                      },
-                      "required": [
-                        "mr_td",
-                        "rtmr_0",
-                        "rtmr_1",
-                        "rtmr_2",
-                        "mr_config_id"
-                      ],
-                      "type": "object"
-                    },
-                    "podvm_artifact": {
-                      "$ref": "#/$defs/cpuArtifact"
-                    },
-                    "podvm_measurements_sha256": {
-                      "pattern": "^[0-9a-f]{64}$",
-                      "type": "string"
-                    },
-                    "podvm_profile": {
-                      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
-                      "type": "string"
-                    },
-                    "podvm_source_revision": {
-                      "pattern": "^[0-9a-f]{40}$",
-                      "type": "string"
-                    },
-                    "podvm_variant": {
-                      "const": "cpu"
-                    },
-                    "podvm_version": {
-                      "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\+[0-9A-Za-z.-]+)?$",
-                      "type": "string"
-                    },
-                    "tee": {
-                      "const": "tdx"
-                    }
-                  },
                   "required": [
-                    "podvm_version",
-                    "podvm_profile",
-                    "podvm_source_revision",
-                    "podvm_measurements_sha256",
-                    "podvm_artifact",
-                    "tee",
-                    "configuration",
-                    "measurements",
-                    "podvm_variant"
-                  ],
-                  "type": "object"
+                    "snp"
+                  ]
                 },
                 {
-                  "additionalProperties": false,
-                  "properties": {
-                    "configuration": {
-                      "$ref": "#/$defs/snpRecord/properties/configuration"
-                    },
-                    "cpu_model": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "measurements": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "host_data": {
-                          "pattern": "^[0-9a-f]{64}$",
-                          "type": "string"
-                        },
-                        "measurement": {
-                          "$ref": "#/$defs/sha384"
-                        }
-                      },
-                      "required": [
-                        "measurement",
-                        "host_data"
-                      ],
-                      "type": "object"
-                    },
-                    "podvm_artifact": {
-                      "$ref": "#/$defs/cpuArtifact"
-                    },
-                    "podvm_measurements_sha256": {
-                      "pattern": "^[0-9a-f]{64}$",
-                      "type": "string"
-                    },
-                    "podvm_profile": {
-                      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
-                      "type": "string"
-                    },
-                    "podvm_source_revision": {
-                      "pattern": "^[0-9a-f]{40}$",
-                      "type": "string"
-                    },
-                    "podvm_variant": {
-                      "const": "cpu"
-                    },
-                    "podvm_version": {
-                      "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\+[0-9A-Za-z.-]+)?$",
-                      "type": "string"
-                    },
-                    "tee": {
-                      "const": "snp"
-                    }
-                  },
                   "required": [
-                    "podvm_version",
-                    "podvm_profile",
-                    "podvm_source_revision",
-                    "podvm_measurements_sha256",
-                    "podvm_artifact",
-                    "tee",
-                    "cpu_model",
-                    "configuration",
-                    "measurements",
-                    "podvm_variant"
-                  ],
-                  "type": "object"
-                },
-                {
-                  "additionalProperties": false,
-                  "properties": {
-                    "configuration": {
-                      "$ref": "#/$defs/snpRecord/properties/configuration"
-                    },
-                    "cpu_model": {
-                      "minLength": 1,
-                      "type": "string"
-                    },
-                    "gpu": {
-                      "$ref": "#/$defs/gpu"
-                    },
-                    "measurements": {
-                      "additionalProperties": false,
-                      "properties": {
-                        "host_data": {
-                          "pattern": "^[0-9a-f]{64}$",
-                          "type": "string"
-                        },
-                        "measurement": {
-                          "$ref": "#/$defs/sha384"
-                        }
-                      },
-                      "required": [
-                        "measurement",
-                        "host_data"
-                      ],
-                      "type": "object"
-                    },
-                    "podvm_artifact": {
-                      "$ref": "#/$defs/nvidiaArtifact"
-                    },
-                    "podvm_measurements_sha256": {
-                      "pattern": "^[0-9a-f]{64}$",
-                      "type": "string"
-                    },
-                    "podvm_profile": {
-                      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
-                      "type": "string"
-                    },
-                    "podvm_source_revision": {
-                      "pattern": "^[0-9a-f]{40}$",
-                      "type": "string"
-                    },
-                    "podvm_variant": {
-                      "const": "nvidia"
-                    },
-                    "podvm_version": {
-                      "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\+[0-9A-Za-z.-]+)?$",
-                      "type": "string"
-                    },
-                    "tee": {
-                      "const": "snp"
-                    }
-                  },
-                  "required": [
-                    "podvm_version",
-                    "podvm_profile",
-                    "podvm_source_revision",
-                    "podvm_measurements_sha256",
-                    "podvm_artifact",
-                    "tee",
-                    "cpu_model",
-                    "configuration",
-                    "measurements",
-                    "podvm_variant",
-                    "gpu"
-                  ],
-                  "type": "object"
+                    "tdx"
+                  ]
                 }
-              ]
+              ],
+              "properties": {
+                "snp": {
+                  "$ref": "#/$defs/snpMeasurements"
+                },
+                "tdx": {
+                  "$ref": "#/$defs/tdxMeasurements"
+                }
+              },
+              "type": "object"
             },
-            "minItems": 1,
-            "type": "array",
-            "uniqueItems": true
+            "minProperties": 1,
+            "propertyNames": {
+              "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\+[0-9A-Za-z.-]+)?$"
+            },
+            "type": "object"
           }
         },
         "required": [
           "initdata",
-          "podvm",
-          "references"
+          "releases"
         ],
         "type": "object"
       },
       "propertyNames": {
-        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
-        "type": "string"
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
       },
       "type": "object"
     }
@@ -758,7 +229,6 @@
     "schema_version",
     "schema",
     "release",
-    "resolution_sha256",
     "workloads"
   ],
   "title": "Trustbase workload reference measurements",

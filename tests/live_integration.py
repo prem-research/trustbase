@@ -33,24 +33,27 @@ def main():
         t.package(inputs, dist, release, require_workloads=True)
         result = t.verify_package(dist, require_workloads=True)
         assert len(result["workloads"]) == 2
+        profiles = {p["id"]: p["podvm"]["profile"] for p in manifest["profiles"]}
         variants = set()
         count = 0
-        for workload in result["workloads"].values():
-            selected = upstream["profiles"][workload["podvm"]["profile"]]
-            variant = t.podvm_variant(selected)
-            variants.add(variant)
-            records = workload["references"]
-            assert len(records) == len(selected["sev"]) + ("tdx" in selected)
-            for record in records:
-                assert record["podvm_variant"] == variant
-                assert record["podvm_artifact"] == upstream["artifacts"][variant]
-                if variant == "nvidia":
-                    assert record["gpu"] == selected["gpu"]
-                    assert record["tee"] == "snp"
-            count += len(records)
+        for ident, workload in result["workloads"].items():
+            selected = upstream["profiles"][profiles[ident]]
+            variants.add(t.podvm_variant(selected))
+            entry = workload["releases"][tag]
+            assert set(entry["snp"]) == set(selected["sev"])
+            for cpu, measurement in entry["snp"].items():
+                assert measurement == selected["sev"][cpu]["measurement"]
+            if "tdx" in selected:
+                assert entry["tdx"] == {key: selected["tdx"]["measurement"][key]
+                                        for key in entry["tdx"]}
+            else:
+                assert "tdx" not in entry
+            path = authoring / "init-data" / ident / "init-data.toml"
+            assert workload["initdata"]["host_data"] == t.initdata(path.read_bytes(), ident)["host_data"]
+            count += len(entry["snp"]) + ("tdx" in entry)
         assert variants == {"cpu", "nvidia"}
         print(f"Live integration passed: PodVM {tag}, CPU + NVIDIA, "
-              f"{count} complete reference records, verified attestations, reproducible package.")
+              f"{count} reference measurements, verified attestations, reproducible package.")
 
 
 if __name__ == "__main__":

@@ -484,42 +484,28 @@ def catalog(inputs, release, trusted_root=None):
     for profile in sorted(manifest["profiles"], key=lambda p: p["id"]):
         ident, path = profile["id"], profile["initdata"]
         values = initdata(source_file(inputs, path).read_bytes(), ident)
-        records = []
+        releases = {}
         for tag in sorted(lock["workloads"][ident],
                           key=lambda tag: (stable_version(tag).precedence_key, tag)):
             selected = documents[tag]["profiles"][profile["podvm"]["profile"]]
-            variant = podvm_variant(selected)
-            common = {
-                "podvm_version": tag, "podvm_profile": profile["podvm"]["profile"],
-                "podvm_source_revision": lock["releases"][tag]["source_revision"],
-                "podvm_measurements_sha256": lock["releases"][tag]["measurements_sha256"],
-                "podvm_variant": variant,
-                "podvm_artifact": podvm_variants(documents[tag])[variant]["artifact"],
-            }
-            if "gpu" in selected:
-                common["gpu"] = selected["gpu"]
+            entry = releases.setdefault(tag, {})
             if "tdx" in selected:
-                records.append({
-                    **common, "tee": "tdx", "configuration": selected["tdx"]["configuration"],
-                    "measurements": {**selected["tdx"]["measurement"],
-                                     "mr_config_id": values["mr_config_id"]},
-                })
-            for cpu, data in sorted(selected["sev"].items()):
-                records.append({
-                    **common, "tee": "snp", "cpu_model": cpu, "configuration": data["configuration"],
-                    "measurements": {"measurement": data["measurement"],
-                                     "host_data": values["host_data"]},
-                })
+                measurement = selected["tdx"]["measurement"]
+                entry["tdx"] = {key: measurement[key]
+                                for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}
+            if selected["sev"]:
+                entry["snp"] = {cpu: data["measurement"]
+                                for cpu, data in sorted(selected["sev"].items())}
         workloads[ident] = {
-            "initdata": {"path": path, **{k: values[k] for k in ("algorithm", "digest", "sha256")}},
-            "podvm": {"repository": PODVM_REPO, **profile["podvm"]},
-            "references": records,
+            "initdata": {key: values[key]
+                         for key in ("algorithm", "digest", "host_data", "mr_config_id")},
+            "releases": releases,
         }
     result = {
         "schema_version": 1,
         "schema": f"https://raw.githubusercontent.com/{release['source_repository']}/"
                   f"{release['source_revision']}/schemas/measurements.schema.json",
-        "release": release, "resolution_sha256": hash_file(Path(inputs) / "resolution.json"),
+        "release": release,
         "workloads": workloads,
     }
     check_schema(result, "measurements.schema.json")

@@ -358,23 +358,26 @@ class PackagingTests(Workspace):
         with patch.object(t, "verify_attestation"):
             result = t.package(inputs, self.base / "mixed", RELEASE)
             self.assertEqual(t.verify_package(self.base / "mixed"), result)
-        router = result["workloads"]["model-router"]["references"]
-        self.assertEqual({r["podvm_version"] for r in router}, {"v0.1.6"})
-        self.assertEqual({r["tee"] for r in router}, {"tdx", "snp"})
-        for record in router:
-            self.assertEqual(record["podvm_variant"], "cpu")
-            self.assertEqual(record["podvm_artifact"], upstream("v0.1.6")["artifact"])
-        gpu = result["workloads"]["example-model"]["references"]
-        self.assertEqual({r["tee"] for r in gpu}, {"snp"})
+        router = result["workloads"]["model-router"]["releases"]
+        self.assertEqual(set(router), {"v0.1.6"})
+        self.assertEqual(set(router["v0.1.6"]), {"tdx", "snp"})
+        selected = upstream("v0.1.6")["profiles"]["2vcpu-8g"]
+        self.assertEqual(router["v0.1.6"]["tdx"],
+                         {key: selected["tdx"]["measurement"][key]
+                          for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")})
+        self.assertEqual(router["v0.1.6"]["snp"],
+                         {cpu: data["measurement"] for cpu, data in selected["sev"].items()})
+        gpu = result["workloads"]["example-model"]["releases"]
+        self.assertEqual(set(gpu), {"v0.3.13"})
+        self.assertEqual(set(gpu["v0.3.13"]), {"snp"})
         path = self.root / "init-data/example-model/init-data.toml"
         expected = t.initdata(path.read_bytes(), "example-model")["host_data"]
-        for record in gpu:
-            self.assertEqual(record["podvm_version"], "v0.3.13")
-            self.assertEqual(record["podvm_artifact"], upstream()["artifacts"]["nvidia"])
-            self.assertEqual(record["configuration"]["cpus"], 8)
-            self.assertEqual(record["measurements"]["host_data"], expected)
+        self.assertEqual(result["workloads"]["example-model"]["initdata"]["host_data"], expected)
+        self.assertEqual(gpu["v0.3.13"]["snp"],
+                         {cpu: data["measurement"] for cpu, data
+                          in upstream()["profiles"]["h100-pcie-1-96g"]["sev"].items()})
 
-    def test_roundtrip_reproducibility_and_complete_records(self):
+    def test_roundtrip_reproducibility_and_reference_measurements(self):
         inputs = self.snapshot()
         with patch.object(t, "verify_attestation"):
             first = t.package(inputs, self.base / "dist1", RELEASE, require_workloads=True)
@@ -384,30 +387,27 @@ class PackagingTests(Workspace):
         for file in (self.base / "dist1").iterdir():
             self.assertEqual(file.read_bytes(), (self.base / "dist2" / file.name).read_bytes())
         workload = first["workloads"]["model-router"]
-        records = workload["references"]
-        self.assertEqual(len(records), 10)  # Two versions: one TDX + four SNP models each.
+        self.assertEqual(set(workload["initdata"]),
+                         {"algorithm", "digest", "host_data", "mr_config_id"})
+        self.assertEqual(set(workload["releases"]), {"v0.3.13", "v0.3.14"})
         for tag in ("v0.3.13", "v0.3.14"):
-            group = [r for r in records if r["podvm_version"] == tag]
-            tdx = [r for r in group if r["tee"] == "tdx"][0]
-            self.assertEqual(set(tdx["measurements"]),
-                             {"mr_td", "rtmr_0", "rtmr_1", "rtmr_2", "mr_config_id"})
-            snp = [r for r in group if r["tee"] == "snp"]
-            self.assertEqual({r["cpu_model"] for r in snp},
-                             set(upstream(tag)["profiles"]["2vcpu-8g"]["sev"]))
-            for record in snp:
-                self.assertEqual(record["configuration"]["vcpu_type"], record["cpu_model"])
-                self.assertEqual(len(record["measurements"]["host_data"]), 64)
-        gpu = first["workloads"]["example-model"]["references"]
-        self.assertEqual(len(gpu), 8)
-        for record in gpu:
-            self.assertEqual(record["tee"], "snp")
-            self.assertEqual(record["podvm_variant"], "nvidia")
-            self.assertEqual(record["gpu"], upstream()["profiles"]["h100-pcie-1-96g"]["gpu"])
-            self.assertEqual(record["podvm_artifact"], upstream(record["podvm_version"])["artifacts"]["nvidia"])
+            entry = workload["releases"][tag]
+            selected = upstream(tag)["profiles"]["2vcpu-8g"]
+            self.assertEqual(set(entry["tdx"]), {"mr_td", "rtmr_0", "rtmr_1", "rtmr_2"})
+            self.assertEqual(set(entry["snp"]), set(selected["sev"]))
+            for cpu, measurement in entry["snp"].items():
+                self.assertEqual(measurement, selected["sev"][cpu]["measurement"])
+        gpu = first["workloads"]["example-model"]["releases"]
+        self.assertEqual(set(gpu), {"v0.3.13", "v0.3.14"})
+        self.assertEqual(sum(len(entry["snp"]) for entry in gpu.values()), 8)
+        for tag, entry in gpu.items():
+            self.assertEqual(set(entry), {"snp"})
+            self.assertEqual(set(entry["snp"]),
+                             set(upstream(tag)["profiles"]["h100-pcie-1-96g"]["sev"]))
         with self.assertRaisesRegex(t.Error, "output already exists"):
             t.package(inputs, self.base / "dist1", RELEASE)
 
-    def test_every_current_profile_preserves_bundle_topology_and_measurements(self):
+    def test_every_current_profile_preserves_measurements(self):
         manifest = t.validate(self.root)
         template = (self.root / "init-data/example-model/init-data.toml").read_bytes()
         shutil.rmtree(self.root / "init-data")
@@ -424,34 +424,32 @@ class PackagingTests(Workspace):
             self.assertEqual(t.verify_package(self.base / "all-profiles"), result)
         for ident, workload in result["workloads"].items():
             selected = upstream()["profiles"][ident]
-            variant = t.podvm_variant(selected)
-            self.assertEqual(len(workload["references"]), len(selected["sev"]) + ("tdx" in selected))
-            for record in workload["references"]:
-                self.assertEqual(record["podvm_variant"], variant)
-                self.assertEqual(record["podvm_artifact"], upstream()["artifacts"][variant])
-                if variant == "nvidia":
-                    self.assertEqual(record["gpu"], selected["gpu"])
-                    self.assertEqual(record["tee"], "snp")
-                source = selected["tdx"] if record["tee"] == "tdx" else selected["sev"][record["cpu_model"]]
-                self.assertEqual(record["configuration"], source["configuration"])
-                if record["tee"] == "snp":
-                    self.assertEqual(record["measurements"]["measurement"], source["measurement"])
-                else:
-                    for key, value in source["measurement"].items():
-                        self.assertEqual(record["measurements"][key], value)
+            self.assertEqual(set(workload["releases"]), {"v0.3.13"})
+            entry = workload["releases"]["v0.3.13"]
+            self.assertEqual(set(entry["snp"]), set(selected["sev"]))
+            for cpu, data in selected["sev"].items():
+                self.assertEqual(entry["snp"][cpu], data["measurement"])
+            if "tdx" in selected:
+                self.assertEqual(entry["tdx"],
+                                 {key: selected["tdx"]["measurement"][key]
+                                  for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")})
+            else:
+                self.assertNotIn("tdx", entry)
 
-    def test_catalog_schema_binds_variant_artifact_gpu_and_tee(self):
+    def test_catalog_schema_rejects_malformed_measurements(self):
         inputs = self.snapshot()
         with patch.object(t, "verify_attestation"):
             original = t.catalog(inputs, RELEASE)
         for edit in (
-            lambda r: r.update(podvm_variant="cpu"),
-            lambda r: r.update(podvm_artifact=upstream()["artifacts"]["cpu"]),
-            lambda r: r.pop("gpu"),
-            lambda r: r.update(tee="tdx"),
+            lambda w: w["releases"]["v0.3.13"]["tdx"].pop("rtmr_1"),
+            lambda w: w["releases"]["v0.3.13"].update(snp={}),
+            lambda w: w["releases"]["v0.3.13"].update(snp={"NOT-A-CPU": "a" * 96}),
+            lambda w: w["releases"]["v0.3.13"].update(tdx={"mr_td": "bad"}),
+            lambda w: w["initdata"].pop("host_data"),
+            lambda w: w["releases"].update({"not a version": {"snp": {"EPYC": "a" * 96}}}),
         ):
             doc = copy.deepcopy(original)
-            edit(doc["workloads"]["example-model"]["references"][0])
+            edit(doc["workloads"]["model-router"])
             with self.subTest(edit=edit), self.assertRaises(t.Error):
                 t.check_schema(doc, "measurements.schema.json")
 
@@ -471,15 +469,15 @@ class PackagingTests(Workspace):
         with patch.object(t, "verify_attestation"), self.assertRaisesRegex(t.Error, "outside constraint"):
             t.read_snapshot(inputs)
 
-    def test_release_catalog_cannot_mix_cpu_variants(self):
+    def test_release_catalog_tampering_is_detected(self):
         inputs = self.snapshot()
         with patch.object(t, "verify_attestation"):
             t.package(inputs, self.base / "dist", RELEASE)
             dist = self.base / "dist"
             doc = t.load_json((dist / "measurements.json").read_bytes())
-            records = doc["workloads"]["model-router"]["references"]
-            snp = [r for r in records if r["tee"] == "snp"]
-            snp[0]["measurements"]["measurement"] = snp[1]["measurements"]["measurement"]
+            snp = doc["workloads"]["model-router"]["releases"]["v0.3.13"]["snp"]
+            first, second = sorted(snp)[:2]
+            snp[first] = snp[second]
             (dist / "measurements.json").write_bytes(t.json_bytes(doc))
             sums = t.parse_sums((dist / "SHA256SUMS").read_bytes())
             sums["measurements.json"] = t.hash_file(dist / "measurements.json")
