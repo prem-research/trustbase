@@ -1273,9 +1273,21 @@ allow_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
     i_storage.shared == false
     count(i_storage.options) == 0
     i_storage.mount_point == concat("", ["/run/kata-containers/", bundle_id, "/rootfs"])
-    i_storage.source == input.OCI.Annotations["io.kubernetes.cri.image-name"]
+    image_pull_source_allowed(i_storage)
     print("allow_storage with image_guest_pull: true")
 }
+
+# Real containers must pull the image named by their pinned OCI annotation.
+image_pull_source_allowed(i_storage) if {
+    input.OCI.Annotations["io.kubernetes.cri.container-type"] == "container"
+    i_storage.source == input.OCI.Annotations["io.kubernetes.cri.image-name"]
+}
+
+# The pod sandbox has no image-name annotation.
+image_pull_source_allowed(i_storage) if {
+    input.OCI.Annotations["io.kubernetes.cri.container-type"] == "sandbox"
+}
+
 allow_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
     print("allow_storage with scsi: start")
 
