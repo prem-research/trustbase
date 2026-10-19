@@ -329,6 +329,7 @@ allow_by_sandbox_name(p_oci, i_oci, p_storages, i_storages, s_name, s_namespace)
     i_namespace := i_oci.Annotations[S_NAMESPACE_KEY]
 
     allow_by_container_types(p_oci, i_oci, s_name, i_namespace)
+    object.get(p_oci.Annotations, "cdi.k8s.io/gpu", null) == object.get(i_oci.Annotations, "cdi.k8s.io/gpu", null)
     allow_by_bundle_or_sandbox_id(p_oci, i_oci, p_storages, i_storages)
     allow_process(p_oci.Process, i_oci.Process, s_name, s_namespace)
 
@@ -1805,6 +1806,8 @@ RemoveContainerRequest:= {"ops": ops, "allowed": true} if {
 allow_vfio_device(p_vfio_devices, i_vfio_device) if {
     print("allow_vfio_device manual 1: start")
 
+    count(p_vfio_devices) == 0
+
     vfio_device_path := policy_data.devices.vfio.device_path
     startswith(i_vfio_device.container_path, vfio_device_path)
     suffix := trim_prefix(i_vfio_device.container_path, vfio_device_path)
@@ -1824,6 +1827,9 @@ allow_vfio_device(p_vfio_devices, i_vfio_device) if {
 allow_vfio_device_cdi_correlation(p_vfio_devices, i_vfio_devices, i_oci) if {
     print("allow_vfio_device_cdi_correlation manual 1: start")
 
+    count(p_vfio_devices) == 0
+    allow_vfio_without_policy_device(i_oci)
+
     gpu_entries := split(i_oci.Annotations["cdi.k8s.io/gpu"], ",")
     every entry in gpu_entries {
         regex.match("^nvidia\\.com/(gpu|pgpu)=[0-9]+$", entry)
@@ -1835,6 +1841,15 @@ allow_vfio_device_cdi_correlation(p_vfio_devices, i_vfio_devices, i_oci) if {
     }
 
     print("allow_vfio_device_cdi_correlation manual 1: true")
+}
+
+allow_vfio_without_policy_device(i_oci) if {
+    i_oci.Annotations["io.katacontainers.pkg.oci.container_type"] == "pod_sandbox"
+}
+
+allow_vfio_without_policy_device(i_oci) if {
+    some env in i_oci.Process.Env
+    regex.match("^VISIBLE_CDI_DEVICES=(.*:)?nvidia\\.com/gpu=", env)
 }
 
 policy_data := {
