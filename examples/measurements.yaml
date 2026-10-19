@@ -1,12 +1,12 @@
 schema_version: 1
 profiles:
   - id: model-router
-    initdata: init-data/model-router/init-data.toml
+    initdata: init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml
     podvm:
       profile: 2vcpu-8g
       version: ">=0.3.13 <0.4.0"
   - id: example-model
-    initdata: init-data/example-model/init-data.toml
+    initdata: init-data/f541d90ef872c2822fe3f73b83b5326782c845d9a13469c18a2d1d3eb8a8ee20.toml
     podvm:
       profile: h100-pcie-1-96g
       version: "^0.3.13"

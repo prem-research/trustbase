@@ -13,6 +13,7 @@ import trustbase as t
 SOURCES = {
     "src/runtime/pkg/govmm/qemu/qemu.go": "d32503985c0cb4e1e8cab49e02a5767f2ddcf94eba7a72fee5dc6dda13a3cdac",
     "src/runtime/pkg/oci/utils.go": "fed19ad47071d3839a229a6305fed59990b5b5f42e79ec03647b9787a917580f",
+    "Cargo.lock": "4442e695e0b4e020016dba808173b6c9e1809bafd45acc2b79eea1c80d93116a",
 }
 
 
@@ -26,8 +27,20 @@ def upstream():
     return result
 
 
+def check_policy_engine_pin(sources):
+    """The admission evaluator must use the regorus revision the guest agent is built with."""
+    import admission
+    lock = sources["Cargo.lock"]
+    pin = f'source = "git+https://github.com/microsoft/regorus?rev={admission.REGORUS_REVISION}#{admission.REGORUS_REVISION}"'
+    block = re.search(r'\[\[package\]\]\nname = "regorus"\n(.*?)\n\n', lock, re.S)
+    assert block is not None and pin in block.group(1), "Kata's Cargo.lock pins another regorus revision"
+    local = (Path(__file__).resolve().parents[1] / "tools/kata-policy-eval/Cargo.lock").read_text()
+    assert pin in local, "the evaluator lockfile pins another regorus revision"
+
+
 def main():
     sources = upstream()
+    check_policy_engine_pin(sources)
     qemu = sources["src/runtime/pkg/govmm/qemu/qemu.go"]
     oci = sources["src/runtime/pkg/oci/utils.go"]
     resize = re.search(r"func adjustProperLength\(.*?\n}", qemu, re.S).group()
@@ -74,7 +87,8 @@ RESIZE
         actual = t.initdata(base64.b64decode(vector["Raw"]), "oracle")
         for field in ("digest", "host_data", "mr_config_id"):
             assert bytes.fromhex(actual[field]) == base64.b64decode(reference[field]), (vector, field)
-    print(f"Kata {t.KATA_REVISION}: {len(vectors)} exact-byte Go/Python vectors passed.")
+    print(f"Kata {t.KATA_REVISION}: {len(vectors)} exact-byte Go/Python vectors passed; "
+          "policy engine pin matches the agent.")
 
 
 if __name__ == "__main__":

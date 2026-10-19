@@ -1,0 +1,4 @@
+[toolchain]
+# Kata's workspace declares rust-version = "1.95" at the pinned revision.
+channel = "1.95"
+profile = "minimal"

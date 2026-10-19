@@ -1,0 +1,22 @@
+[package]
+name = "kata-policy-eval"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Evaluate agent requests against an Init-Data policy with the kata-agent's own policy crate"
+
+[dependencies]
+# Both crates come from the exact Kata revision that PodVM's guest agent is built from
+# (trustbase.KATA_REVISION). They pull the same regorus git pin the agent uses.
+kata-agent-policy = { git = "https://github.com/kata-containers/kata-containers", rev = "cf82bb35c80320178bf7570252fe75d6fb263209" }
+protocols = { git = "https://github.com/kata-containers/kata-containers", rev = "cf82bb35c80320178bf7570252fe75d6fb263209", features = ["with-serde"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+slog = "2"
+slog-scope = "4"
+tokio = { version = "1", features = ["rt", "macros"] }
+
+[profile.release]
+debug = false
+strip = true

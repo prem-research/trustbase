@@ -1,0 +1,173 @@
+# Admission rules: the approval authority for Init-Data candidates submitted by coco-fleet.
+# These rules are global; nothing here describes a particular workload. The pod shape (containers,
+# images, model, namespace, sandbox name) is read from each candidate and checked against the
+# `floor`. `rules.accepted_sha256` pins the exact Rego rules text (everything before
+# `policy_data := {`) that was reviewed: a candidate whose rules differ is rejected until the new
+# digest is accepted here. `defaults` is the exact set of `default <Request> := <bool>` headers, and
+# `policy_data` the generated constants that must stay identical. Every change needs CODEOWNERS
+# review. Digests must be quoted: an all-digit hex string would otherwise be a YAML integer.
+schema_version: 1
+evaluator:
+  kata_revision: cf82bb35c80320178bf7570252fe75d6fb263209
+  regorus_revision: 898643129e3652efd43e596f978d99f85e770235
+source:
+  repository: prem-research/coco-fleet
+  branch: main
+  path_prefix: candidates/
+policy: genpolicy
+rules:
+  accepted_sha256:
+  - '0fcfb637a7f7815a2d31445a1444253483b8daf5550b03155adae67f70972594'
+defaults:
+  AddARPNeighborsRequest: false
+  AddSwapPathRequest: false
+  AddSwapRequest: false
+  AllowRequestsFailingPolicy: false
+  CloseStdinRequest: false
+  CopyFileRequest: false
+  CreateContainerRequest: false
+  CreateSandboxRequest: false
+  DestroySandboxRequest: true
+  ExecProcessRequest: false
+  GetDiagnosticDataRequest: false
+  GetIPTablesRequest: false
+  GetMetricsRequest: false
+  GetOOMEventRequest: true
+  GuestDetailsRequest: true
+  ListInterfacesRequest: false
+  ListRoutesRequest: false
+  MemAgentCompactConfig: false
+  MemAgentMemcgConfig: false
+  MemHotplugByProbeRequest: false
+  OnlineCPUMemRequest: true
+  PauseContainerRequest: false
+  ReadStreamRequest: false
+  RemoveContainerRequest: true
+  RemoveStaleVirtiofsShareMountsRequest: true
+  ReseedRandomDevRequest: false
+  ResizeVolumeRequest: false
+  ResumeContainerRequest: false
+  SetGuestDateTimeRequest: false
+  SetIPTablesRequest: false
+  SetPolicyRequest: false
+  SignalProcessRequest: true
+  StartContainerRequest: true
+  StartTracingRequest: false
+  StatsContainerRequest: true
+  StopTracingRequest: false
+  TtyWinResizeRequest: true
+  UpdateContainerRequest: false
+  UpdateEphemeralMountsRequest: false
+  UpdateInterfaceRequest: false
+  UpdateRoutesRequest: false
+  VolumeStatsRequest: false
+  WaitProcessRequest: true
+  WriteStreamRequest: false
+policy_data:
+  copy_file:
+  - $(sfprefix)
+  allow_env_regex:
+  - ^HOSTNAME=$(dns_label)$
+  - ^$(svc_name_downward_env)_PORT_$(ip_p)_(TCP|UDP)=(tcp|udp)://$(ipv4_a):$(ip_p)$
+  - ^$(svc_name_downward_env)_PORT_$(ip_p)_(TCP|UDP)_PROTO=(tcp|udp)$
+  - ^$(svc_name_downward_env)_PORT_$(ip_p)_(TCP|UDP)_PORT=$(ip_p)$
+  - ^$(svc_name_downward_env)_PORT_$(ip_p)_(TCP|UDP)_ADDR=$(ipv4_a)$
+  - ^$(svc_name_downward_env)_SERVICE_HOST=$(ipv4_a)$
+  - ^$(svc_name_downward_env)_SERVICE_PORT=$(ip_p)$
+  - ^$(svc_name_downward_env)_SERVICE_PORT_$(dns_label)=$(ip_p)$
+  - ^$(svc_name_downward_env)_PORT=(tcp|udp)://$(ipv4_a):$(ip_p)$
+  - ^JOB_COMPLETION_INDEX=[0-9]+$
+  - ^AZURE_CLIENT_ID=[A-Fa-f0-9-]*$
+  - ^AZURE_TENANT_ID=[A-Fa-f0-9-]*$
+  - ^AZURE_FEDERATED_TOKEN_FILE=/var/run/secrets/azure/tokens/azure-identity-token$
+  - ^AZURE_AUTHORITY_HOST=https://login\.microsoftonline\.com/$
+  - ^TERM=xterm$
+  default_caps:
+  - CAP_CHOWN
+  - CAP_DAC_OVERRIDE
+  - CAP_FSETID
+  - CAP_FOWNER
+  - CAP_MKNOD
+  - CAP_NET_RAW
+  - CAP_SETGID
+  - CAP_SETUID
+  - CAP_SETFCAP
+  - CAP_SETPCAP
+  - CAP_NET_BIND_SERVICE
+  - CAP_SYS_CHROOT
+  - CAP_KILL
+  - CAP_AUDIT_WRITE
+  privileged_caps:
+  - CAP_CHOWN
+  - CAP_DAC_OVERRIDE
+  - CAP_DAC_READ_SEARCH
+  - CAP_FOWNER
+  - CAP_FSETID
+  - CAP_KILL
+  - CAP_SETGID
+  - CAP_SETUID
+  - CAP_SETPCAP
+  - CAP_LINUX_IMMUTABLE
+  - CAP_NET_BIND_SERVICE
+  - CAP_NET_BROADCAST
+  - CAP_NET_ADMIN
+  - CAP_NET_RAW
+  - CAP_IPC_LOCK
+  - CAP_IPC_OWNER
+  - CAP_SYS_MODULE
+  - CAP_SYS_RAWIO
+  - CAP_SYS_CHROOT
+  - CAP_SYS_PTRACE
+  - CAP_SYS_PACCT
+  - CAP_SYS_ADMIN
+  - CAP_SYS_BOOT
+  - CAP_SYS_NICE
+  - CAP_SYS_RESOURCE
+  - CAP_SYS_TIME
+  - CAP_SYS_TTY_CONFIG
+  - CAP_MKNOD
+  - CAP_LEASE
+  - CAP_AUDIT_WRITE
+  - CAP_AUDIT_CONTROL
+  - CAP_SETFCAP
+  - CAP_MAC_OVERRIDE
+  - CAP_MAC_ADMIN
+  - CAP_SYSLOG
+  - CAP_WAKE_ALARM
+  - CAP_BLOCK_SUSPEND
+  - CAP_AUDIT_READ
+  - CAP_PERFMON
+  - CAP_BPF
+  - CAP_CHECKPOINT_RESTORE
+  common:
+    cpath: /run/kata-containers/shared/containers(?:/passthrough)?
+    root_path: /run/kata-containers/$(bundle-id)/rootfs
+    sfprefix: ^$(cpath)/(watchable/)?[a-z0-9][a-z0-9-]{0,63}-[a-z0-9]{16}-
+    spath: /run/kata-containers/sandbox/storage
+  vfio_device_path: /dev/vfio/devices/vfio
+  sandbox_storages:
+  - driver: ephemeral
+    driver_options: []
+    source: shm
+    fstype: tmpfs
+    options:
+    - noexec
+    - nosuid
+    - nodev
+    - mode=1777
+    - size=67108864
+    mount_point: /run/kata-containers/sandbox/shm
+    fs_group: null
+    shared: false
+floor:
+  namespaces:
+  - coco-poc
+  pause_image: mcr.microsoft.com/oss/kubernetes/pause:3.6
+  image_repositories:
+  - docker.io/vllm/vllm-openai
+  - ghcr.io/prem-research/reticle
+  privileged_containers:
+    attestation: ghcr.io/prem-research/reticle
+  device_binds:
+  - /dev/sev-guest
+  max_gpu_devices: 1

@@ -39,6 +39,19 @@ jobs:
           bash .github/scripts/install-gh.sh
       - name: Validate authoring inputs and run offline tests
         run: make validate test
+      - name: Install the Rust toolchain pinned by the admission evaluator
+        run: rustup toolchain install "$(python -c 'import tomllib;print(tomllib.load(open("tools/kata-policy-eval/rust-toolchain.toml","rb"))["toolchain"]["channel"])')" --profile minimal
+      - name: Cache the admission evaluator build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            tools/kata-policy-eval/target
+          key: kata-policy-eval-${{ runner.os }}-${{ hashFiles('tools/kata-policy-eval/Cargo.lock', 'tools/kata-policy-eval/rust-toolchain.toml', 'tools/kata-policy-eval/src/**') }}
+      - name: Build the evaluator and run the admission gate on every registered workload
+        run: make admit
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.25.12"
@@ -58,6 +71,11 @@ jobs:
           if [[ -n "$RELEASE_TAG" ]]; then
             python trustbase.py validate --require-workloads
           fi
+      - name: Fetch and verify the previous release
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/release.py previous
       - name: Resolve and freeze verified PodVM inputs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,12 +84,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.value }}
+          PREVIOUS: ${{ steps.previous.outputs.previous }}
         run: |
+          if [[ -n "$PREVIOUS" ]]; then chain=(--previous-dist "$PREVIOUS"); else chain=(--no-previous); fi
           python trustbase.py package \
             --inputs build/inputs --output dist \
             --release-version "$VERSION" \
             --source-repository "$GITHUB_REPOSITORY" \
-            --source-revision "$GITHUB_SHA"
+            --source-revision "$GITHUB_SHA" "${chain[@]}"
           python trustbase.py verify --dist dist
       - name: Upload release assets for review
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -113,17 +133,30 @@ jobs:
         run: |
           python trustbase.py verify --dist dist --require-workloads
           python .github/scripts/release.py check
-      - name: Attest release assets
+      - name: Attest release payloads
+        id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             dist/measurements.json
             dist/*.tar.gz
-            dist/SHA256SUMS
-      - name: Verify attestations and publish release
+      - name: Attach the Sigstore bundle to the release set
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE" dist/provenance.sigstore.json
+      - name: Verify the signed release set and publish it
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python .github/scripts/release.py publish
+        run: |
+          python trustbase.py verify --dist dist --require-provenance --require-workloads
+          python .github/scripts/release.py publish
+      - name: Upload published assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trustbase-published-assets
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
 
   pages:
     name: Deploy measurements to GitHub Pages
@@ -144,12 +177,12 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: trustbase-release-assets
+          name: trustbase-published-assets
           path: dist
-      - name: Prepare measurements for GitHub Pages
+      - name: Prepare measurements and provenance for GitHub Pages
         run: |
           mkdir _site
-          cp dist/measurements.json _site/measurements.json
+          cp dist/measurements.json dist/provenance.sigstore.json _site/
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - name: Upload GitHub Pages artifact

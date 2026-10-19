@@ -126,7 +126,7 @@ class AuthoringTests(Workspace):
                     t.validate(self.root)
 
     def test_missing_mismatched_invalid_and_unlisted_toml(self):
-        path = self.root / "init-data/model-router/init-data.toml"
+        path = self.root / "init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml"
         original = path.read_bytes()
         for raw in (original.replace(b'model-router', b'wrong'),
                     original.replace(b'sha384', b'md5'),
@@ -146,17 +146,24 @@ class AuthoringTests(Workspace):
         with self.assertRaisesRegex(t.Error, "unlisted"):
             t.validate(self.root)
 
+    def test_content_addressed_filename(self):
+        path = self.root / "init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml"
+        raw = path.read_bytes()
+        path.write_bytes(raw + b"\n")
+        with self.assertRaisesRegex(t.Error, "filename SHA-256 mismatch"):
+            t.validate(self.root)
+
     def test_paths_and_symlinks(self):
         for value in ("../outside/init-data.toml", "/tmp/init-data.toml",
-                      "init-data/../init-data/model-router/init-data.toml"):
+                      "init-data/../init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml"):
             shutil.copyfile(t.ROOT / "examples/measurements.yaml", self.root / "measurements.yaml")
             self.change_manifest(lambda m: m["profiles"][0].update(initdata=value))
             with self.assertRaises(t.Error):
                 t.validate(self.root)
         shutil.copyfile(t.ROOT / "examples/measurements.yaml", self.root / "measurements.yaml")
-        path = self.root / "init-data/model-router/init-data.toml"
+        path = self.root / "init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml"
         path.unlink()
-        path.symlink_to(t.ROOT / "examples/init-data/model-router/init-data.toml")
+        path.symlink_to(t.ROOT / "examples/init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml")
         with self.assertRaisesRegex(t.Error, "symlink"):
             t.validate(self.root)
 
@@ -166,7 +173,7 @@ class AuthoringTests(Workspace):
                 t.constraint(value)
 
     def test_raw_bytes_and_transport(self):
-        original = (self.root / "init-data/model-router/init-data.toml").read_bytes()
+        original = (self.root / "init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml").read_bytes()
         value = t.initdata(original, "model-router")
         self.assertEqual(len(value["host_data"]), 64)
         self.assertEqual(len(value["mr_config_id"]), 96)
@@ -184,7 +191,7 @@ class AuthoringTests(Workspace):
         self.assertEqual(gzip.decompress(base64.b64decode(encoded)), original)
 
     def test_sha256_padding_and_sha512_truncation(self):
-        raw = (self.root / "init-data/model-router/init-data.toml").read_bytes()
+        raw = (self.root / "init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml").read_bytes()
         short = t.initdata(raw.replace(b"sha384", b"sha256"), "model-router")
         self.assertEqual(short["mr_config_id"], short["digest"] + "00" * 16)
         long = t.initdata(raw.replace(b"sha384", b"sha512"), "model-router")
@@ -192,7 +199,7 @@ class AuthoringTests(Workspace):
         self.assertEqual(long["mr_config_id"], long["digest"][:96])
 
     def test_model_mounts_schema_and_invariants(self):
-        base = (self.root / "init-data/model-router/init-data.toml").read_text()
+        base = (self.root / "init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml").read_text()
         valid_info = "e" * 64 + "_4096_07074027-62a4-548d-bbf6-3ba2f85aa868"
         valid = base + f'\n"model-mounts.json" = \'\'\'\n[{{"modelid":"org/m@rev","mount_path":"/models/m","info":"{valid_info}"}}]\n\'\'\'\n'
         self.assertEqual(len(t.initdata(valid.encode(), "model-router")["digest"]), 96)
@@ -370,7 +377,7 @@ class PackagingTests(Workspace):
         gpu = result["workloads"]["example-model"]["releases"]
         self.assertEqual(set(gpu), {"v0.3.13"})
         self.assertEqual(set(gpu["v0.3.13"]), {"snp"})
-        path = self.root / "init-data/example-model/init-data.toml"
+        path = self.root / "init-data/f541d90ef872c2822fe3f73b83b5326782c845d9a13469c18a2d1d3eb8a8ee20.toml"
         expected = t.initdata(path.read_bytes(), "example-model")["host_data"]
         self.assertEqual(result["workloads"]["example-model"]["initdata"]["host_data"], expected)
         self.assertEqual(gpu["v0.3.13"]["snp"],
@@ -388,7 +395,8 @@ class PackagingTests(Workspace):
             self.assertEqual(file.read_bytes(), (self.base / "dist2" / file.name).read_bytes())
         workload = first["workloads"]["model-router"]
         self.assertEqual(set(workload["initdata"]),
-                         {"algorithm", "digest", "host_data", "mr_config_id"})
+                         {"algorithm", "digest", "sha256", "path", "host_data", "mr_config_id"})
+        self.assertEqual(workload["initdata"]["path"], "init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml")
         self.assertEqual(set(workload["releases"]), {"v0.3.13", "v0.3.14"})
         for tag in ("v0.3.13", "v0.3.14"):
             entry = workload["releases"][tag]
@@ -409,12 +417,13 @@ class PackagingTests(Workspace):
 
     def test_every_current_profile_preserves_measurements(self):
         manifest = t.validate(self.root)
-        template = (self.root / "init-data/example-model/init-data.toml").read_bytes()
+        template = (self.root / "init-data/f541d90ef872c2822fe3f73b83b5326782c845d9a13469c18a2d1d3eb8a8ee20.toml").read_bytes()
         shutil.rmtree(self.root / "init-data")
         manifest["profiles"] = []
         for ident in upstream()["profiles"]:
-            path = f"init-data/{ident}/init-data.toml"
-            t.write_file(self.root, path, template.replace(b"example-model", ident.encode()))
+            raw = template.replace(b"example-model", ident.encode())
+            path = f"init-data/{t.sha256(raw)}.toml"
+            t.write_file(self.root, path, raw)
             manifest["profiles"].append({"id": ident, "initdata": path,
                                          "podvm": {"profile": ident, "version": "0.3.13"}})
         (self.root / "measurements.yaml").write_bytes(t.json_bytes(manifest))
@@ -455,7 +464,7 @@ class PackagingTests(Workspace):
 
     def test_modified_frozen_inputs(self):
         inputs = self.snapshot()
-        path = inputs / "init-data/model-router/init-data.toml"
+        path = inputs / "init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml"
         path.write_bytes(path.read_bytes() + b"\n")
         with self.assertRaisesRegex(t.Error, "inventory"):
             t.read_snapshot(inputs)
@@ -479,11 +488,177 @@ class PackagingTests(Workspace):
             first, second = sorted(snp)[:2]
             snp[first] = snp[second]
             (dist / "measurements.json").write_bytes(t.json_bytes(doc))
-            sums = t.parse_sums((dist / "SHA256SUMS").read_bytes())
-            sums["measurements.json"] = t.hash_file(dist / "measurements.json")
-            (dist / "SHA256SUMS").write_text("".join(f"{v}  {k}\n" for k, v in sorted(sums.items())))
             with self.assertRaisesRegex(t.Error, "catalog differs"):
                 t.verify_package(dist)
+
+    def test_package_has_two_payloads_and_provenance_needs_the_bundle(self):
+        inputs = self.snapshot()
+        dist = self.base / "dist"
+        with patch.object(t, "verify_attestation"):
+            result = t.package(inputs, dist, RELEASE)
+            self.assertEqual({p.name for p in dist.iterdir()},
+                             {"measurements.json", "trustbase-inputs-v1.0.0.tar.gz"})
+            self.assertIsNone(result["release"]["previous"])
+            self.assertEqual(result["revoked"], [])
+            self.assertEqual(t.verify_package(dist), result)
+            with self.assertRaisesRegex(t.Error, "missing or escaping file: provenance.sigstore.json"):
+                t.verify_package(dist, require_provenance=True)
+            with self.assertRaisesRegex(t.Error, "maximum age requires provenance"):
+                t.verify_package(dist, max_age=10)
+            (dist / "SHA256SUMS").write_text("")
+            with self.assertRaisesRegex(t.Error, "chained-format fields"):
+                t.verify_package(dist)
+
+    def legacy_dist(self, inputs, name="legacy"):
+        with patch.object(t, "verify_attestation"):
+            result = t.catalog(inputs, RELEASE, legacy=True)
+        dist = self.base / name
+        dist.mkdir()
+        assets = {"measurements.json": t.json_bytes(result),
+                  "trustbase-inputs-v1.0.0.tar.gz": t.archive_bytes(inputs)}
+        for key, raw in assets.items():
+            (dist / key).write_bytes(raw)
+        (dist / "SHA256SUMS").write_text("".join(f"{t.sha256(raw)}  {key}\n"
+                                                 for key, raw in sorted(assets.items())))
+        return dist
+
+    def test_legacy_release_still_verifies_without_chain_fields(self):
+        dist = self.legacy_dist(self.snapshot())
+        with patch.object(t, "verify_attestation"):
+            result = t.verify_package(dist)
+            self.assertNotIn("previous", result["release"])
+            self.assertNotIn("revoked", result)
+            with self.assertRaisesRegex(t.Error, "legacy releases have no provenance bundle"):
+                t.verify_package(dist, require_provenance=True)
+            with self.assertRaisesRegex(t.Error, "legacy releases are not chained"):
+                t.verify_package(dist, previous_dist=dist)
+            (dist / "SHA256SUMS").write_text("0" * 64 + "  measurements.json\n")
+            with self.assertRaises(t.Error):
+                t.verify_package(dist)
+
+    def test_release_chain_ordering_and_revocation_monotonicity(self):
+        inputs = self.snapshot()
+        first, second = self.base / "first", self.base / "second"
+        with patch.object(t, "verify_attestation"):
+            t.package(inputs, first, RELEASE)
+            previous = t.previous_release(first)
+            self.assertEqual(previous["version"], "v1.0.0")
+            self.assertEqual(previous["revoked"], [])
+            newer = t.release_metadata("v1.0.1", "prem-research/trustbase", "b" * 40)
+            result = t.package(inputs, second, newer, previous)
+            self.assertEqual(result["release"]["previous"],
+                             {"version": "v1.0.0", "measurements_sha256": t.hash_file(first / "measurements.json")})
+            t.verify_package(second, previous_dist=first)
+            with self.assertRaisesRegex(t.Error, "does not chain"):
+                t.verify_package(first, previous_dist=second)
+            with self.assertRaisesRegex(t.Error, "does not follow"):
+                t.package(inputs, self.base / "older",
+                          t.release_metadata("v0.9.0", "prem-research/trustbase", "c" * 40), previous)
+            dropped = {**previous, "revoked": [{"id": "gone", "sha256": "0" * 64, "reason": "test"}]}
+            with self.assertRaisesRegex(t.Error, "revocations from v1.0.0 were dropped"):
+                t.package(inputs, self.base / "dropped", newer, dropped)
+            preview = t.release_metadata("preview-abc", "prem-research/trustbase", "d" * 40)
+            t.package(inputs, self.base / "preview", preview, previous)
+
+    def test_revoked_definitions_are_rejected_when_registered_and_carried_otherwise(self):
+        path = self.root / "init-data/a72fe3e72cdbe2f66b500527c585d76ffcf020b1bbc59ae5ed87c28bba26c403.toml"
+        (self.root / "revoked.yaml").write_text(
+            f"schema_version: 1\nentries:\n  - id: model-router\n    sha256: {t.sha256(path.read_bytes())}\n"
+            "    reason: test\n")
+        with self.assertRaisesRegex(t.Error, "revoked Init-Data is still registered"):
+            t.validate(self.root)
+        (self.root / "revoked.yaml").write_text(
+            "schema_version: 1\nentries:\n  - id: old\n    sha256: '" + "0" * 64 + "'\n    reason: superseded\n"
+            "  - id: old\n    sha256: '" + "0" * 64 + "'\n    reason: twice\n")
+        with self.assertRaisesRegex(t.Error, "duplicate revoked"):
+            t.validate(self.root)
+        (self.root / "revoked.yaml").write_text(
+            "schema_version: 1\nentries:\n  - id: old\n    sha256: " + "0" * 64 + "\n    reason: superseded\n")
+        with self.assertRaisesRegex(t.Error, "not of type 'string'"):
+            t.validate(self.root)  # an unquoted all-digit digest is a YAML integer
+        (self.root / "revoked.yaml").write_text(
+            "schema_version: 1\nentries:\n  - id: old\n    sha256: '" + "0" * 64 + "'\n    reason: superseded\n")
+        inputs = self.snapshot()
+        self.assertTrue((inputs / "revoked.yaml").is_file())
+        with patch.object(t, "verify_attestation"):
+            result = t.package(inputs, self.base / "dist", RELEASE)
+            self.assertEqual(result["revoked"], [{"id": "old", "sha256": "0" * 64, "reason": "superseded"}])
+            t.verify_package(self.base / "dist")
+            with self.assertRaisesRegex(t.Error, "legacy catalogs cannot carry revocations"):
+                t.catalog(inputs, RELEASE, legacy=True)
+            doc = t.load_json((self.base / "dist" / "measurements.json").read_bytes())
+            doc["revoked"] = []
+            (self.base / "dist" / "measurements.json").write_bytes(t.json_bytes(doc))
+            with self.assertRaisesRegex(t.Error, "catalog differs"):
+                t.verify_package(self.base / "dist")
+
+    def verifier_result(self, dist, repository_id="12345", timestamp="2026-10-19T10:00:00.123456789Z"):
+        subjects = [{"name": name, "digest": {"sha256": t.hash_file(dist / name)}}
+                    for name in ("measurements.json", "trustbase-inputs-v1.0.0.tar.gz")]
+        return {"attestation": {}, "verificationResult": {
+            "statement": {"subject": subjects},
+            "signature": {"certificate": {"sourceRepositoryIdentifier": repository_id}},
+            "verifiedTimestamps": [{"type": "Tlog", "uri": "https://rekor.sigstore.dev",
+                                    "timestamp": timestamp}]}}
+
+    def test_provenance_bundle_binds_subjects_repository_and_signing_time(self):
+        inputs = self.snapshot()
+        dist = self.base / "dist"
+        with patch.object(t, "verify_attestation"):
+            t.package(inputs, dist, RELEASE)
+        (dist / t.BUNDLE_NAME).write_text("{}")
+        good = self.verifier_result(dist)
+
+        def verifier(result, code=0):
+            return patch.object(t.subprocess, "run",
+                                return_value=subprocess.CompletedProcess([], code, json.dumps([result]), "nope"))
+        with verifier(good) as run:
+            t.verify_package(dist, require_provenance=True, min_version="v1.0.0", max_age=10 ** 9)
+        # The first two verifier runs authenticate the release payloads; later ones re-verify PodVM.
+        self.assertGreaterEqual(run.call_count, 2)
+        command = run.call_args_list[1].args[0]
+        for flag, value in (("--repo", t.TRUSTBASE_REPO), ("--signer-workflow", t.TRUSTBASE_WORKFLOW),
+                            ("--source-ref", "refs/tags/v1.0.0"), ("--source-digest", "a" * 40),
+                            ("--bundle", str(t.source_file(dist, t.BUNDLE_NAME)))):
+            self.assertEqual(command[command.index(flag) + 1], value)
+        with verifier(good), patch.object(t, "TRUSTBASE_REPOSITORY_ID", 12345):
+            t.verify_package(dist, require_provenance=True)
+        with verifier(good), patch.object(t, "TRUSTBASE_REPOSITORY_ID", 999):
+            with self.assertRaisesRegex(t.Error, "another repository id"):
+                t.verify_package(dist, require_provenance=True)
+        with verifier(good), self.assertRaisesRegex(t.Error, "signing event is .* old"):
+            t.verify_package(dist, require_provenance=True, max_age=1)
+        with verifier(good), self.assertRaisesRegex(t.Error, "below the minimum version"):
+            t.verify_package(dist, require_provenance=True, min_version="v1.0.1")
+        with self.assertRaisesRegex(t.Error, "invalid minimum version"):
+            t.verify_package(dist, min_version="potato")
+        with verifier(good, code=1), self.assertRaisesRegex(t.Error, "provenance verification failed"):
+            t.verify_package(dist, require_provenance=True)
+        for edit, message in (
+            (lambda r: r["verificationResult"]["statement"]["subject"][0]["digest"].update(sha256="0" * 64), "subjects differ"),
+            (lambda r: r["verificationResult"]["statement"]["subject"].append({"name": "extra", "digest": {"sha256": "1" * 64}}), "subjects differ"),
+            (lambda r: r["verificationResult"]["statement"]["subject"].pop(), "subjects differ"),
+            (lambda r: r["verificationResult"].update(verifiedTimestamps=[]), "no verified signing timestamp"),
+            (lambda r: r["verificationResult"]["verifiedTimestamps"][0].update(timestamp="yesterday"), "invalid verifier timestamp"),
+        ):
+            bad = copy.deepcopy(good)
+            edit(bad)
+            with self.subTest(message=message), verifier(bad), self.assertRaisesRegex(t.Error, message):
+                t.verify_package(dist, require_provenance=True)
+        other = self.base / "other"
+        with patch.object(t, "verify_attestation"):
+            t.package(inputs, other, t.release_metadata("v1.0.0", "someone/else", "a" * 40))
+        (other / t.BUNDLE_NAME).write_text("{}")
+        with verifier(good), self.assertRaisesRegex(t.Error, "only verified for prem-research/trustbase"):
+            t.verify_package(other, require_provenance=True)
+
+    def test_verifier_timestamps(self):
+        for value in ("2026-10-19T10:00:00Z", "2026-10-19T10:00:00.5Z", "2026-10-19T10:00:00.123456789Z",
+                      "2026-10-19T12:00:00.1+02:00"):
+            self.assertEqual(t.parse_timestamp(value).timestamp() // 1, 1792404000.0)
+        for value in ("", None, "2026-10-19 10:00:00Z", "2026-10-19T10:00:00"):
+            with self.assertRaises(t.Error):
+                t.parse_timestamp(value)
 
     def test_empty_catalog_preview_and_publication_guard(self):
         inputs = self.base / "empty"

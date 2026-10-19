@@ -21,7 +21,8 @@ class ReleaseTests(unittest.TestCase):
         self.env = {
             "GITHUB_EVENT_NAME": "push", "GITHUB_REF_TYPE": "tag",
             "GITHUB_REF_NAME": "v1.0.0", "GITHUB_SHA": "a" * 40,
-            "GITHUB_REPOSITORY": "prem-research/trustbase", "GH_TOKEN": "test-only",
+            "GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_REPOSITORY_ID": "12345",
+            "GH_TOKEN": "test-only",
         }
 
     def test_only_stable_tag_pushes_can_publish(self):
@@ -39,18 +40,34 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaises(t.Error):
                     release.tag()
 
-    def catalog(self, empty=False, revision="a" * 40):
-        return t.json_bytes({
-            "release": t.release_metadata("v1.0.0", "prem-research/trustbase", revision),
+    def catalog(self, empty=False, revision="a" * 40, chained=True):
+        doc = {
+            "release": {**t.release_metadata("v1.0.0", "prem-research/trustbase", revision)},
             "workloads": {} if empty else {"test": {}},
-        })
+        }
+        if chained:
+            doc["release"]["previous"] = None
+            doc["revoked"] = []
+        return t.json_bytes(doc)
 
-    def test_reject_empty_catalog_and_wrong_source(self):
+    def test_reject_empty_catalog_wrong_source_and_legacy_shape(self):
         with patch.dict(os.environ, self.env, clear=True):
-            for data in (self.catalog(empty=True), self.catalog(revision="b" * 40)):
+            for data in (self.catalog(empty=True), self.catalog(revision="b" * 40),
+                         self.catalog(chained=False)):
                 with patch.object(Path, "read_bytes", return_value=data):
                     with self.assertRaises(t.Error):
                         release.check()
+
+    def test_repository_id_is_checked_when_pinned(self):
+        not_found = urllib.error.HTTPError("test", 404, "", {}, None)
+        with patch.dict(os.environ, self.env, clear=True), \
+                patch.object(Path, "read_bytes", return_value=self.catalog()), \
+                patch.object(release.urllib.request, "urlopen", side_effect=not_found):
+            with patch.object(t, "TRUSTBASE_REPOSITORY_ID", 12345):
+                release.check()
+            with patch.object(t, "TRUSTBASE_REPOSITORY_ID", 999):
+                with self.assertRaisesRegex(t.Error, "unexpected repository"):
+                    release.check()
 
     def test_existing_release_and_api_failures_never_overwrite(self):
         with patch.dict(os.environ, self.env, clear=True), \
@@ -67,22 +84,78 @@ class ReleaseTests(unittest.TestCase):
                               side_effect=urllib.error.HTTPError("test", 404, "", {}, None)):
                 self.assertEqual(release.check(), ("v1.0.0", "prem-research/trustbase", "a" * 40))
 
-    def test_publish_verifies_before_creating_draft(self):
-        assets = [Path("dist/measurements.json"), Path("dist/SHA256SUMS"),
+    def test_publish_requires_exactly_the_three_assets(self):
+        assets = [Path("dist/measurements.json"), Path("dist/provenance.sigstore.json"),
                   Path("dist/trustbase-inputs-v1.0.0.tar.gz")]
         with patch.object(sys, "argv", ["release.py", "publish"]), \
-                patch.object(release, "check", return_value=("v1.0.0", "prem-research/trustbase", "a"*40)), \
-                patch.object(Path, "iterdir", return_value=iter(assets)), \
+                patch.object(release, "check", return_value=("v1.0.0", "prem-research/trustbase", "a" * 40)), \
                 patch.object(release, "run") as run:
-            release.main()
-        commands = [call.args[0] for call in run.call_args_list]
-        self.assertEqual(len(commands), 5)
-        self.assertTrue(all(command[:3] == ["gh", "attestation", "verify"] for command in commands[:3]))
-        self.assertEqual(commands[3][:3], ["gh", "release", "create"])
-        self.assertIn("--draft", commands[3])
-        self.assertEqual(commands[4][:3], ["gh", "release", "edit"])
-        self.assertIn("--draft=false", commands[4])
-        self.assertFalse(any("--clobber" in command for command in commands))
+            with patch.object(Path, "iterdir", return_value=iter(assets)):
+                release.main()
+            commands = [call.args[0] for call in run.call_args_list]
+            self.assertEqual(len(commands), 2)
+            self.assertEqual(commands[0][:3], ["gh", "release", "create"])
+            self.assertIn("--draft", commands[0])
+            self.assertEqual(commands[1][:3], ["gh", "release", "edit"])
+            self.assertIn("--draft=false", commands[1])
+            self.assertFalse(any("--clobber" in command for command in commands))
+            for wrong in (assets[:2], assets + [Path("dist/SHA256SUMS")]):
+                with patch.object(Path, "iterdir", return_value=iter(wrong)):
+                    with self.assertRaisesRegex(t.Error, "exactly the two payloads"):
+                        release.main()
+
+    def releases(self, *tags, draft=(), prerelease=()):
+        return [{"tag_name": tag, "draft": tag in draft, "prerelease": tag in prerelease} for tag in tags]
+
+    def test_previous_release_selection_and_verification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            env = {**self.env, "GITHUB_OUTPUT": str(output)}
+            previous = Path(temporary) / "previous"
+            with patch.dict(os.environ, env, clear=True), patch.object(release, "PREVIOUS", previous):
+                with patch.object(release, "api", return_value=[]):
+                    release.previous()
+                self.assertEqual(output.read_text(), "previous=\n")
+                output.write_text("")
+                listing = self.releases("v1.0.0", "v1.0.10", "v1.0.9", "v2.0.0", "v1.1.0-rc.1", "dev",
+                                        draft=("v2.0.0",), prerelease=("v1.0.9",))
+                verified = {"release": {"version": "v1.0.10"}}
+
+                def download(command):
+                    if command[:3] == ["gh", "release", "download"]:
+                        previous.mkdir()
+                        (previous / "measurements.json").write_text("{}")
+                with patch.object(release, "api", return_value=listing), \
+                        patch.object(release, "run", side_effect=download) as run, \
+                        patch.object(t, "verify_package", return_value=verified) as verify:
+                    release.previous()
+                self.assertEqual(run.call_args_list[0].args[0][:4], ["gh", "release", "download", "v1.0.10"])
+                self.assertEqual(verify.call_args.kwargs, {"require_provenance": True})
+                self.assertEqual(output.read_text(), f"previous={previous}\n")
+
+    def test_previous_legacy_release_is_verified_per_asset(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "output"
+            previous = Path(temporary) / "previous"
+            env = {**self.env, "GITHUB_OUTPUT": str(output)}
+            catalog = t.json_bytes({"release": t.release_metadata("v1.0.0", "prem-research/trustbase", "c" * 40)})
+
+            def download(command):
+                if command[:3] == ["gh", "release", "download"]:
+                    previous.mkdir()
+                    for name in ("measurements.json", "SHA256SUMS", "trustbase-inputs-v1.0.0.tar.gz"):
+                        (previous / name).write_bytes(catalog)
+            with patch.dict(os.environ, env, clear=True), patch.object(release, "PREVIOUS", previous), \
+                    patch.object(release, "api", return_value=self.releases("v1.0.0")), \
+                    patch.object(release, "run", side_effect=download) as run, \
+                    patch.object(t, "verify_package", return_value={"release": {"version": "v1.0.0"}}) as verify:
+                release.previous()
+            verifies = [c.args[0] for c in run.call_args_list if c.args[0][:3] == ["gh", "attestation", "verify"]]
+            self.assertEqual(len(verifies), 3)
+            for command in verifies:
+                self.assertEqual(command[command.index("--source-digest") + 1], "c" * 40)
+                self.assertEqual(command[command.index("--source-ref") + 1], "refs/tags/v1.0.0")
+            self.assertEqual(verify.call_args.kwargs, {})
 
 
 if __name__ == "__main__":

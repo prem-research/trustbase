@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 build/
 dist/
+.DS_Store
+tools/kata-policy-eval/target/

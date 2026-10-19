@@ -30,8 +30,9 @@ def main():
         assert t.stable_version(tag) == version
         upstream = t.load_json((inputs / "podvm" / tag / "measurements.json").read_bytes())
         release = t.release_metadata("v0.0.0-integration", "prem-research/trustbase", "0" * 40)
-        t.package(inputs, dist, release, require_workloads=True)
+        t.package(inputs, dist, release, None, require_workloads=True)
         result = t.verify_package(dist, require_workloads=True)
+        assert {p.name for p in dist.iterdir()} == {"measurements.json", t.archive_name(release)}
         assert len(result["workloads"]) == 2
         profiles = {p["id"]: p["podvm"]["profile"] for p in manifest["profiles"]}
         variants = set()
@@ -48,7 +49,7 @@ def main():
                                         for key in entry["tdx"]}
             else:
                 assert "tdx" not in entry
-            path = authoring / "init-data" / ident / "init-data.toml"
+            path = authoring / next(p["initdata"] for p in manifest["profiles"] if p["id"] == ident)
             assert workload["initdata"]["host_data"] == t.initdata(path.read_bytes(), ident)["host_data"]
             count += len(entry["snp"]) + ("tdx" in entry)
         assert variants == {"cpu", "nvidia"}

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import gzip
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -16,6 +18,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import urllib.error
 import urllib.parse
@@ -28,6 +31,13 @@ import yaml
 ROOT = Path(__file__).resolve().parent
 PODVM_REPO = "prem-research/podvm"
 PODVM_WORKFLOW = PODVM_REPO + "/.github/workflows/podvm.yml"
+TRUSTBASE_REPO = "prem-research/trustbase"
+TRUSTBASE_WORKFLOW = TRUSTBASE_REPO + "/.github/workflows/release.yml"
+# Numeric GitHub repository id of TRUSTBASE_REPO. Repository names can be reused after a
+# rename, so provenance verification also compares the certificate's stable identifier
+# once this is set (`gh api repos/prem-research/trustbase --jq .id`).
+TRUSTBASE_REPOSITORY_ID = None
+BUNDLE_NAME = "provenance.sigstore.json"
 KATA_REVISION = "cf82bb35c80320178bf7570252fe75d6fb263209"
 MAX_FILE = 16 * 1024 * 1024
 MAX_ARCHIVE = 128 * 1024 * 1024
@@ -168,6 +178,19 @@ def stable_version(tag):
     return None if version.prerelease else version
 
 
+def load_revoked(root):
+    """Cumulative revocations from revoked.yaml; an absent file means none."""
+    root = Path(root)
+    if not (root / "revoked.yaml").exists() and not (root / "revoked.yaml").is_symlink():
+        return []
+    doc = yaml.load(source_file(root, "revoked.yaml").read_bytes(), Loader=UniqueLoader)
+    check_schema(doc, "revoked.schema.json")
+    entries = sorted(doc["entries"], key=lambda entry: (entry["sha256"], entry["id"]))
+    digests = [entry["sha256"] for entry in entries]
+    require(len(set(digests)) == len(digests), "duplicate revoked Init-Data digest")
+    return entries
+
+
 def validate(root, require_workloads=False):
     root = Path(root)
     manifest = yaml.load(source_file(root, "measurements.yaml").read_bytes(),
@@ -175,22 +198,29 @@ def validate(root, require_workloads=False):
     check_schema(manifest, "manifest.schema.json")
     ids = set()
     paths = set()
+    digests = set()
     for profile in manifest["profiles"]:
         ident = profile["id"]
         require(ident not in ids, f"duplicate workload id: {ident}")
         ids.add(ident)
         path = profile["initdata"]
-        require(path.startswith("init-data/") and path.endswith("/init-data.toml"),
-                f"{ident}: expected init-data/<workload>/init-data.toml")
+        match = re.fullmatch(r"init-data/([0-9a-f]{64})\.toml", path)
+        require(match is not None, f"{ident}: expected init-data/<sha256>.toml")
         require(path not in paths, f"{ident}: Init-Data file is already assigned: {path}")
         paths.add(path)
-        initdata(source_file(root, path).read_bytes(), ident)
+        raw = source_file(root, path).read_bytes()
+        require(match.group(1) == sha256(raw), f"{ident}: Init-Data filename SHA-256 mismatch")
+        digests.add(match.group(1))
+        initdata(raw, ident)
         constraint(profile["podvm"]["version"])
     # Every production definition must be represented in the catalog.
     directory = root / "init-data"
     require(not directory.is_symlink(), "init-data must not be a symlink")
     found = {p.relative_to(root).as_posix() for p in directory.rglob("*.toml")}
     require(found == paths, f"unlisted Init-Data definitions: {sorted(found - paths)}")
+    revoked = {entry["sha256"] for entry in load_revoked(root)}
+    require(not revoked & digests,
+            f"revoked Init-Data is still registered: {sorted(revoked & digests)}")
     require(not require_workloads or ids, "publication requires at least one production workload")
     return manifest
 
@@ -208,10 +238,20 @@ class GitHub:
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=headers),
                                         timeout=60) as response:
-                raw = response.read(MAX_FILE + 1)
-        except (urllib.error.URLError, TimeoutError) as exc:
+                chunks = []
+                total = 0
+                while total <= MAX_FILE:
+                    chunk = response.read(min(1 << 20, MAX_FILE + 1 - total))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total += len(chunk)
+                raw = b"".join(chunks)
+                declared = response.headers.get("Content-Length")
+        except (urllib.error.URLError, TimeoutError, http.client.HTTPException) as exc:
             raise Error(f"download failed: {url}: {exc}") from exc
         require(len(raw) <= MAX_FILE, f"download too large: {url}")
+        require(declared is None or int(declared) == len(raw), f"truncated download: {url}")
         return raw
 
     def api(self, path):
@@ -290,10 +330,12 @@ def parse_sums(raw):
     return result
 
 
-def verify_attestation(artifact, bundle, tag, revision, trusted_root=None):
+def verify_attestation(artifact, bundle, tag, revision, trusted_root=None,
+                       repo=PODVM_REPO, workflow=PODVM_WORKFLOW):
+    """Run GitHub's verifier against a saved bundle and return its parsed results."""
     command = [
         "gh", "attestation", "verify", str(artifact), "--bundle", str(bundle),
-        "--repo", PODVM_REPO, "--signer-workflow", PODVM_WORKFLOW,
+        "--repo", repo, "--signer-workflow", workflow,
         "--source-ref", "refs/tags/" + tag, "--source-digest", revision,
         "--format", "json",
     ]
@@ -305,7 +347,9 @@ def verify_attestation(artifact, bundle, tag, revision, trusted_root=None):
         raise Error(f"{tag}: cannot run GitHub attestation verifier: {exc}") from exc
     require(result.returncode == 0,
             f"{tag}: provenance verification failed for {artifact.name}:\n{result.stderr.strip()}")
-    require(bool(load_json(result.stdout)), f"{tag}: verifier returned no attestations")
+    results = load_json(result.stdout)
+    require(isinstance(results, list) and results, f"{tag}: verifier returned no attestations")
+    return results
 
 
 def podvm_variants(doc):
@@ -396,6 +440,8 @@ def resolve(root, output, github=None, trusted_root=None):
     with tempfile.TemporaryDirectory(prefix=".trustbase-resolve-", dir=output.parent) as temporary:
         staging = Path(temporary)
         write_file(staging, "measurements.yaml", source_file(root, "measurements.yaml").read_bytes())
+        if (root / "revoked.yaml").exists() or (root / "revoked.yaml").is_symlink():
+            write_file(staging, "revoked.yaml", source_file(root, "revoked.yaml").read_bytes())
         for profile in manifest["profiles"]:
             write_file(staging, profile["initdata"],
                        source_file(root, profile["initdata"]).read_bytes())
@@ -478,8 +524,35 @@ def release_metadata(version, repository, revision):
     return {"version": version, "source_repository": repository, "source_revision": revision}
 
 
-def catalog(inputs, release, trusted_root=None):
+def previous_link(previous):
+    """Normalize a previous-release reference to the fields recorded in the catalog."""
+    if previous is None:
+        return None
+    link = {"version": previous["version"], "measurements_sha256": previous["measurements_sha256"]}
+    require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,127}", link["version"]) and
+            re.fullmatch(SHA_PATTERN, link["measurements_sha256"]), "invalid previous release reference")
+    return link
+
+
+def check_succession(previous, release, revoked):
+    """A chained release must follow its predecessor and keep every revocation."""
+    if previous is None:
+        return
+    older, newer = stable_version(previous["version"]), stable_version(release["version"])
+    if older is not None and newer is not None:
+        require(older < newer, f"release {release['version']} does not follow {previous['version']}")
+    if "revoked" in previous:
+        dropped = {e["sha256"] for e in previous["revoked"]} - {e["sha256"] for e in revoked}
+        require(not dropped, f"revocations from {previous['version']} were dropped: {sorted(dropped)}")
+
+
+def catalog(inputs, release, previous=None, trusted_root=None, legacy=False):
     manifest, lock, documents = read_snapshot(inputs, trusted_root)
+    revoked = load_revoked(inputs)
+    require(not legacy or not (Path(inputs) / "revoked.yaml").exists(),
+            "legacy catalogs cannot carry revocations")
+    require(not legacy or previous is None, "legacy catalogs cannot reference a previous release")
+    check_succession(previous, release, revoked)
     workloads = {}
     for profile in sorted(manifest["profiles"], key=lambda p: p["id"]):
         ident, path = profile["id"], profile["initdata"]
@@ -497,17 +570,20 @@ def catalog(inputs, release, trusted_root=None):
                 entry["snp"] = {cpu: data["measurement"]
                                 for cpu, data in sorted(selected["sev"].items())}
         workloads[ident] = {
-            "initdata": {key: values[key]
-                         for key in ("algorithm", "digest", "host_data", "mr_config_id")},
+            "initdata": {"path": path, **{key: values[key]
+                         for key in ("algorithm", "digest", "sha256", "host_data", "mr_config_id")}},
             "releases": releases,
         }
     result = {
         "schema_version": 1,
         "schema": f"https://raw.githubusercontent.com/{release['source_repository']}/"
                   f"{release['source_revision']}/schemas/measurements.schema.json",
-        "release": release,
+        "release": dict(release),
         "workloads": workloads,
     }
+    if not legacy:
+        result["release"]["previous"] = previous_link(previous)
+        result["revoked"] = revoked
     check_schema(result, "measurements.schema.json")
     return result
 
@@ -527,21 +603,32 @@ def archive_bytes(inputs):
     return output.getvalue()
 
 
-def package(inputs, output, release, trusted_root=None, require_workloads=False):
+def archive_name(release):
+    return f"trustbase-inputs-{release['version']}.tar.gz"
+
+
+def package(inputs, output, release, previous=None, trusted_root=None, require_workloads=False):
+    """Write the two release payloads; the publication job adds the provenance bundle."""
     output = fresh_directory(output)
-    result = catalog(inputs, release, trusted_root)
+    result = catalog(inputs, release, previous, trusted_root)
     require(not require_workloads or result["workloads"],
             "publication requires at least one production workload")
-    name = f"trustbase-inputs-{release['version']}.tar.gz"
-    assets = {"measurements.json": json_bytes(result), name: archive_bytes(inputs)}
-    sums = "".join(f"{sha256(raw)}  {key}\n" for key, raw in sorted(assets.items()))
+    assets = {"measurements.json": json_bytes(result), archive_name(release): archive_bytes(inputs)}
     with tempfile.TemporaryDirectory(prefix=".trustbase-package-", dir=output.parent) as temporary:
         staging = Path(temporary)
         for key, raw in assets.items():
             write_file(staging, key, raw)
-        write_file(staging, "SHA256SUMS", sums.encode())
         shutil.copytree(staging, output)
     return result
+
+
+def previous_release(dist, trusted_root=None):
+    """Read a downloaded release as the predecessor of the one being built."""
+    dist = Path(dist)
+    result = verify_package(dist, trusted_root, require_provenance=(dist / BUNDLE_NAME).exists())
+    return {"version": result["release"]["version"],
+            "measurements_sha256": hash_file(source_file(dist, "measurements.json")),
+            "revoked": result.get("revoked", [])}
 
 
 def unpack(archive_path, destination):
@@ -561,7 +648,49 @@ def unpack(archive_path, destination):
             write_file(destination, member.name, stream.read())
 
 
-def verify_package(dist, trusted_root=None, require_workloads=False):
+def parse_timestamp(value):
+    """RFC 3339 timestamps as emitted by the Go verifier, including nanoseconds."""
+    match = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(\.\d+)?(Z|[+-]\d{2}:\d{2})", value or "")
+    require(match is not None, f"invalid verifier timestamp: {value!r}")
+    fraction = (match.group(2) or ".0")[:7].ljust(7, "0")
+    return datetime.datetime.fromisoformat(match.group(1) + fraction + match.group(3).replace("Z", "+00:00"))
+
+
+def verify_release_provenance(dist, release, trusted_root=None):
+    """Authenticate both payloads with the published bundle; return the signing time."""
+    require(release["source_repository"] == TRUSTBASE_REPO,
+            f"provenance is only verified for {TRUSTBASE_REPO} releases")
+    bundle = source_file(dist, BUNDLE_NAME)
+    expected = {name: hash_file(source_file(dist, name))
+                for name in ("measurements.json", archive_name(release))}
+    timestamps = []
+    for name in expected:
+        for item in verify_attestation(dist / name, bundle, release["version"], release["source_revision"],
+                                       trusted_root, repo=TRUSTBASE_REPO, workflow=TRUSTBASE_WORKFLOW):
+            verification = item["verificationResult"]
+            subjects = {s["name"]: s["digest"]["sha256"] for s in verification["statement"]["subject"]}
+            require(subjects == expected, f"{name}: attestation subjects differ from the release payloads")
+            certificate = verification["signature"]["certificate"]
+            if TRUSTBASE_REPOSITORY_ID is not None:
+                require(certificate.get("sourceRepositoryIdentifier") == str(TRUSTBASE_REPOSITORY_ID),
+                        f"{name}: attestation was issued for another repository id")
+            stamps = verification.get("verifiedTimestamps") or []
+            require(stamps, f"{name}: attestation has no verified signing timestamp")
+            timestamps.extend(parse_timestamp(stamp.get("timestamp")) for stamp in stamps)
+    return min(timestamps)
+
+
+def verify_chain(result, previous_dist, trusted_root=None):
+    """The catalog's `previous` link must name exactly the given predecessor release."""
+    previous = previous_release(previous_dist, trusted_root)
+    link = {key: previous[key] for key in ("version", "measurements_sha256")}
+    require(result["release"].get("previous") == link,
+            "release does not chain to the given previous release")
+    check_succession(previous, result["release"], result["revoked"])
+
+
+def verify_package(dist, trusted_root=None, require_workloads=False, require_provenance=False,
+                   min_version=None, max_age=None, previous_dist=None):
     dist = Path(dist)
     raw_catalog = source_file(dist, "measurements.json").read_bytes()
     result = load_json(raw_catalog)
@@ -573,20 +702,52 @@ def verify_package(dist, trusted_root=None, require_workloads=False):
         "repository": result["release"]["source_repository"],
         "revision": result["release"]["source_revision"],
     })
-    archive_name = f"trustbase-inputs-{release['version']}.tar.gz"
-    sums = parse_sums(source_file(dist, "SHA256SUMS").read_bytes())
-    require(set(sums) == {"measurements.json", archive_name}, "unexpected release checksums")
-    require({p.name for p in dist.iterdir()} == set(sums) | {"SHA256SUMS"},
-            "unexpected release assets")
-    for name, digest in sums.items():
-        require(hash_file(source_file(dist, name)) == digest, f"release checksum mismatch: {name}")
+    archive = archive_name(release)
+    names = {p.name for p in dist.iterdir()}
+    legacy = "SHA256SUMS" in names
+    if legacy:
+        # Releases published before the chained format: checksums plus per-asset attestations.
+        require("previous" not in result["release"] and "revoked" not in result,
+                "legacy release carries chained-format fields")
+        require(not require_provenance, "legacy releases have no provenance bundle; verify their "
+                                        "per-asset attestations with gh attestation verify")
+        sums = parse_sums(source_file(dist, "SHA256SUMS").read_bytes())
+        require(set(sums) == {"measurements.json", archive}, "unexpected release checksums")
+        require(names == set(sums) | {"SHA256SUMS"}, "unexpected release assets")
+        for name, digest in sums.items():
+            require(hash_file(source_file(dist, name)) == digest, f"release checksum mismatch: {name}")
+        previous = None
+    else:
+        require(names in ({"measurements.json", archive}, {"measurements.json", archive, BUNDLE_NAME}),
+                "unexpected release assets")
+        require("previous" in result["release"] and "revoked" in result,
+                "release lacks the previous/revoked chain fields")
+        previous = result["release"]["previous"]
+        revoked = {entry["sha256"] for entry in result["revoked"]}
+        referenced = {w["initdata"]["sha256"] for w in result["workloads"].values()}
+        require(not revoked & referenced, "revoked Init-Data is still referenced by the catalog")
+    if min_version is not None:
+        floor, actual = stable_version(min_version), stable_version(release["version"])
+        require(floor is not None, f"invalid minimum version: {min_version!r}")
+        require(actual is not None and actual >= floor,
+                f"release {release['version']} is below the minimum version {min_version}")
+    require(max_age is None or require_provenance, "a maximum age requires provenance verification")
+    if require_provenance:
+        signed_at = verify_release_provenance(dist, release, trusted_root)
+        age = time.time() - signed_at.timestamp()
+        if max_age is not None:
+            require(age <= max_age,
+                    f"release signing event is {int(age)} s old, above the maximum {int(max_age)} s")
     with tempfile.TemporaryDirectory(prefix="trustbase-verify-") as temporary:
         inputs = Path(temporary)
-        unpack(dist / archive_name, inputs)
-        expected = catalog(inputs, release, trusted_root)
+        unpack(dist / archive, inputs)
+        expected = catalog(inputs, release, previous, trusted_root, legacy=legacy)
         require(json_bytes(expected) == raw_catalog, "catalog differs from frozen inputs")
-        require(sha256(archive_bytes(inputs)) == sums[archive_name],
+        require(sha256(archive_bytes(inputs)) == hash_file(dist / archive),
                 "input archive is not reproducibly packaged")
+    if previous_dist is not None:
+        require(not legacy, "legacy releases are not chained")
+        verify_chain(result, previous_dist, trusted_root)
     return result
 
 
@@ -605,15 +766,35 @@ def parser():
         command.add_argument("--inputs", type=Path, required=True)
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("--release-version", required=True)
-        command.add_argument("--source-repository", default="prem-research/trustbase")
+        command.add_argument("--source-repository", default=TRUSTBASE_REPO)
         command.add_argument("--source-revision", required=True)
+        chain = command.add_mutually_exclusive_group(required=True)
+        chain.add_argument("--previous-dist", type=Path,
+                           help="downloaded release that this one supersedes")
+        chain.add_argument("--no-previous", action="store_true",
+                           help="this is the first chained release")
         if name == "package":
             command.add_argument("--require-workloads", action="store_true")
-    verify = commands.add_parser("verify", help="verify checksums, provenance, and reproducibility")
+    verify = commands.add_parser("verify", help="verify payloads, provenance, chain, and reproducibility")
     verify.add_argument("--dist", type=Path, required=True)
     verify.add_argument("--require-workloads", action="store_true")
+    verify.add_argument("--require-provenance", action="store_true",
+                        help="authenticate both payloads with the published Sigstore bundle")
+    verify.add_argument("--min-version", help="reject releases below this stable version")
+    verify.add_argument("--max-age", type=float,
+                        help="reject releases whose verified signing event is older than this many seconds")
+    verify.add_argument("--previous-dist", type=Path,
+                        help="downloaded predecessor release that this one must chain to")
     annotation = commands.add_parser("annotation", help="encode the original bytes as cc_init_data")
     annotation.add_argument("id")
+    admit = commands.add_parser("admit", help="run the admission gate on registered workloads")
+    admit.add_argument("ids", nargs="*", help="workload ids (default: --all)")
+    admit.add_argument("--all", action="store_true", help="gate every registered workload")
+    admit.add_argument("--config", type=Path, help="admission rules (default: <root>/admission.yaml)")
+    admit.add_argument("--evaluator", type=Path, help="kata-policy-eval binary")
+    admit.add_argument("--static-only", action="store_true",
+                       help="skip the behavioral replay (local iteration only; CI never passes this)")
+    admit.add_argument("--report", type=Path, help="write the admission report JSON here")
     return cli
 
 
@@ -628,16 +809,19 @@ def main():
             print(f"Frozen {len(lock['releases'])} PodVM release(s) in {args.output}")
         elif args.command in ("measure", "package"):
             release = release_metadata(args.release_version, args.source_repository, args.source_revision)
+            previous = None if args.no_previous else previous_release(args.previous_dist, args.trusted_root)
             if args.command == "package":
-                package(args.inputs, args.output, release, args.trusted_root, args.require_workloads)
+                package(args.inputs, args.output, release, previous, args.trusted_root, args.require_workloads)
             else:
                 require(not args.output.exists(), f"output already exists: {args.output}")
-                result = catalog(args.inputs, release, args.trusted_root)
+                result = catalog(args.inputs, release, previous, args.trusted_root)
                 args.output.parent.mkdir(parents=True, exist_ok=True)
                 args.output.write_bytes(json_bytes(result))
             print(f"Wrote {args.output}")
         elif args.command == "verify":
-            result = verify_package(args.dist, args.trusted_root, args.require_workloads)
+            result = verify_package(args.dist, args.trusted_root, args.require_workloads,
+                                    args.require_provenance, args.min_version, args.max_age,
+                                    args.previous_dist)
             print(f"Verified {result['release']['version']}: {len(result['workloads'])} workload(s)")
         elif args.command == "annotation":
             manifest = validate(args.root)
@@ -645,6 +829,10 @@ def main():
             require(len(profiles) == 1, f"unknown workload: {args.id}")
             raw = source_file(args.root, profiles[0]["initdata"]).read_bytes()
             print(base64.b64encode(gzip.compress(raw, mtime=0)).decode("ascii"))
+        elif args.command == "admit":
+            require(args.all or args.ids, "select workload ids or pass --all")
+            import admission
+            admission.cli(args)
         return 0
     except (Error, OSError, ValueError, KeyError, TypeError, yaml.YAMLError, tarfile.TarError) as exc:
         print(f"trustbase: error: {exc}", file=sys.stderr)
@@ -652,4 +840,6 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Run through the importable module so helpers such as admission.py share one Error class.
+    import trustbase
+    raise SystemExit(trustbase.main())

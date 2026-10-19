@@ -1,0 +1,13 @@
+# Admission rules for the example definitions: deny-all policies with no policy_data.
+schema_version: 1
+evaluator:
+  kata_revision: cf82bb35c80320178bf7570252fe75d6fb263209
+  regorus_revision: 898643129e3652efd43e596f978d99f85e770235
+source:
+  repository: example/fleet
+  branch: main
+  path_prefix: candidates/
+policy: deny-all
+defaults:
+  CreateContainerRequest: false
+  ExecProcessRequest: false
