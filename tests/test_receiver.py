@@ -23,7 +23,8 @@ receive = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(receive)
 
 QWEN_ID = "qwen38-27b-h100-pcie-1-96g"
-QWEN_PATH = "init-data/0932f8125fe9645a3e8d04a3940b79a5f955226e98ef1427a46800b12ccba47f.toml"
+# Whatever TOML the fleet last imported, so imports do not break the suite.
+QWEN_PATH = next(p["initdata"] for p in t.validate(t.ROOT)["profiles"] if p["id"] == QWEN_ID)
 CANDIDATE = (t.ROOT / QWEN_PATH).read_bytes() + b"# candidate revision\n"
 CONFIG = admission.load_config(t.ROOT)
 NEW_ID = "new-model-h100-pcie-1-96g"
