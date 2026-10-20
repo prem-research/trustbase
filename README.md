@@ -145,7 +145,8 @@ acceptance run on hardware remains the authority for the deployed path.
 
 For each changed fleet candidate that passes the gate, the receiver writes
 `build/admission/admission-report.json`. It records the workload and exact TOML
-digest, approved rules digest, and each replayed request with its expected and observed verdict by the admission workflow upload as a 30-day Actions artifact.
+digest, approved rules digest, and each replayed request with its expected and
+observed verdict. The admission workflow uploads it as a 30-day Actions artifact.
 
 Run the gate locally with a Rust toolchain (rustup installs the pinned channel from
 `tools/kata-policy-eval/rust-toolchain.toml`):
@@ -263,7 +264,7 @@ Each release contains exactly three uploaded assets:
 |---|---|
 | `measurements.json` | Attestation references indexed by workload ID, the chain link to the previous release, and the cumulative revocation list |
 | `trustbase-inputs-<tag>.tar.gz` | Exact Init-Data TOMLs, manifest, `revoked.yaml`, schemas, resolution lock, and the upstream PodVM assets with their attestation bundles |
-| `provenance.sigstore.json` | One Sigstore bundle: the signed in-toto statement naming both payloads as subjects, the signing certificate, and the transparency-log entry |
+| `provenance.sigstore.json` | One Sigstore bundle: the signed in-toto statement naming both payloads as subjects, the signing certificate, and verification material (a public transparency-log entry for public repositories or a signed timestamp for internal repositories) |
 
 GitHub's automatic source archives are separate. The bundle is the output of the
 release workflow's `attest-build-provenance` step, so the same attestation is also

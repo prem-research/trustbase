@@ -2670,7 +2670,7 @@ policy_data := {
           "io.katacontainers.pkg.oci.container_type": "pod_container",
           "io.kubernetes.cri.container-name": "attestation",
           "io.kubernetes.cri.container-type": "container",
-          "io.kubernetes.cri.image-name": "ghcr.io/prem-research/reticle:14fe316@sha256:9de142cda1e4efcf876c614f34fa3fb5c4ba66ec5a7e631269b4dcb8a0af88dd",
+          "io.kubernetes.cri.image-name": "ghcr.io/prem-research/reticle:7e9ddac@sha256:32a7c93f75be41900db00891beb0a6e8be5241513e76157a53e5c3f918c7665e",
           "io.kubernetes.cri.sandbox-id": "^[a-z0-9]{64}$",
           "io.kubernetes.cri.sandbox-name": "^vllm-qwen38-27b-[bcdfghjklmnpqrstvwxz2456789]+-[bcdfghjklmnpqrstvwxz2456789]+$",
           "io.kubernetes.cri.sandbox-namespace": "coco-poc",
