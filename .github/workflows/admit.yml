@@ -68,7 +68,7 @@ jobs:
         id: fleet
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.TRUSTBASE_READER_APP_ID }}
+          client-id: ${{ vars.TRUSTBASE_READER_APP_CLIENT_ID }}
           private-key: ${{ secrets.TRUSTBASE_READER_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: coco-fleet
@@ -144,7 +144,7 @@ jobs:
         id: release
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          app-id: ${{ vars.TRUSTBASE_RELEASE_APP_ID }}
+          client-id: ${{ vars.TRUSTBASE_RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.TRUSTBASE_RELEASE_APP_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
