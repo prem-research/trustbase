@@ -1,7 +1,7 @@
 schema_version: 1
 profiles:
-  - id: qwen38-27b-h100-pcie-1-96g
-    initdata: init-data/0932f8125fe9645a3e8d04a3940b79a5f955226e98ef1427a46800b12ccba47f.toml
-    podvm:
-      profile: h100-pcie-1-96g
-      version: "0.3.18"
+- id: qwen38-27b-h100-pcie-1-96g
+  initdata: init-data/c1db10c3e8b3887a58f8052d4fd6f5bf327a23e45b4e2ec158ba91639412e33c.toml
+  podvm:
+    profile: h100-pcie-1-96g
+    version: 0.3.18
