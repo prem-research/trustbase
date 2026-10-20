@@ -219,8 +219,9 @@ make integration
 `make test` is offline and mocks only the network/signature-verifier boundary.
 `make integration` resolves a real PodVM release, verifies the unified
 measurement/checksum attestations and both bundle digests, and round-trips a
-temporary release with CPU and NVIDIA workloads. Override `PODVM_VERSION` to test
-a different published stable release. Public API reads work without
+temporary release with CPU and NVIDIA workloads. By default it tests the newest
+PodVM release each workload in `measurements.yaml` resolves to; set `PODVM_VERSION`
+to test one specific published stable release instead. Public API reads work without
 authentication; set `GH_TOKEN` to avoid anonymous rate limits.
 
 Build an example candidate:

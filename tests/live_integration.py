@@ -1,4 +1,8 @@
-"""Read-only CPU/NVIDIA integration against one published stable PodVM release."""
+"""Read-only CPU/NVIDIA integration against published stable PodVM releases.
+
+Without --podvm-version, it checks the newest release each registered workload in
+measurements.yaml resolves to, so the test tracks the PodVMs Trustbase actually ships.
+"""
 import argparse
 from pathlib import Path
 import shutil
@@ -9,12 +13,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import trustbase as t
 
 
+def registered_versions():
+    manifest = t.validate(t.ROOT)
+    t.require(manifest["profiles"], "measurements.yaml registers no workloads; pass --podvm-version")
+    selections, _ = t.select_releases(manifest, t.GitHub().releases())
+    return sorted({t.stable_version(tags[-1]) for tags in selections.values()})
+
+
 def main():
     cli = argparse.ArgumentParser(description=__doc__)
-    cli.add_argument("--podvm-version", default="0.3.13")
+    cli.add_argument("--podvm-version", help="exact stable PodVM version (default: registered workloads)")
     args = cli.parse_args()
-    version = t.stable_version(args.podvm_version)
-    t.require(version is not None, "integration requires an exact stable PodVM version")
+    if args.podvm_version:
+        version = t.stable_version(args.podvm_version)
+        t.require(version is not None, "integration requires an exact stable PodVM version")
+        versions = [version]
+    else:
+        versions = registered_versions()
+    for version in versions:
+        check(version)
+
+
+def check(version):
     with tempfile.TemporaryDirectory(prefix="trustbase-live-") as temporary:
         base = Path(temporary)
         authoring = base / "authoring"

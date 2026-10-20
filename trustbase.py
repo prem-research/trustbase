@@ -698,7 +698,11 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
     dist = Path(dist)
     raw_catalog = source_file(dist, "measurements.json").read_bytes()
     result = load_json(raw_catalog)
-    check_schema(result, "measurements.schema.json")
+    names = {p.name for p in dist.iterdir()}
+    legacy = "SHA256SUMS" in names
+    if not legacy:
+        # Legacy catalogs follow the schema of the revision that built them, not this one.
+        check_schema(result, "measurements.schema.json")
     require(not require_workloads or result["workloads"],
             "publication requires at least one production workload")
     release = release_metadata(**{
@@ -707,10 +711,9 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
         "revision": result["release"]["source_revision"],
     })
     archive = archive_name(release)
-    names = {p.name for p in dist.iterdir()}
-    legacy = "SHA256SUMS" in names
     if legacy:
         # Releases published before the chained format: checksums plus per-asset attestations.
+        # Their catalogs cannot be replayed by this revision; rebuild them from source_revision.
         require("previous" not in result["release"] and "revoked" not in result,
                 "legacy release carries chained-format fields")
         require(not require_provenance, "legacy releases have no provenance bundle; verify their "
@@ -742,15 +745,18 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
         if max_age is not None:
             require(age <= max_age,
                     f"release signing event is {int(age)} s old, above the maximum {int(max_age)} s")
+    if previous_dist is not None:
+        require(not legacy, "legacy releases are not chained")
+    if legacy:
+        return result
     with tempfile.TemporaryDirectory(prefix="trustbase-verify-") as temporary:
         inputs = Path(temporary)
         unpack(dist / archive, inputs)
-        expected = catalog(inputs, release, previous, trusted_root, legacy=legacy)
+        expected = catalog(inputs, release, previous, trusted_root)
         require(json_bytes(expected) == raw_catalog, "catalog differs from frozen inputs")
         require(sha256(archive_bytes(inputs)) == hash_file(dist / archive),
                 "input archive is not reproducibly packaged")
     if previous_dist is not None:
-        require(not legacy, "legacy releases are not chained")
         verify_chain(result, previous_dist, trusted_root)
     return result
 

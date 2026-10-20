@@ -551,6 +551,26 @@ class PackagingTests(Workspace):
             with self.assertRaises(t.Error):
                 t.verify_package(dist)
 
+    def test_legacy_predecessor_in_an_older_catalog_format_still_chains(self):
+        inputs = self.snapshot()
+        dist = self.legacy_dist(inputs)
+        # v0.0.7 predates `initdata.path` and `initdata.sha256`.
+        doc = t.load_json((dist / "measurements.json").read_bytes())
+        for workload in doc["workloads"].values():
+            del workload["initdata"]["path"], workload["initdata"]["sha256"]
+        raw = t.json_bytes(doc)
+        (dist / "measurements.json").write_bytes(raw)
+        archive = "trustbase-inputs-v1.0.0.tar.gz"
+        (dist / "SHA256SUMS").write_text(f"{t.sha256(raw)}  measurements.json\n"
+                                         f"{t.hash_file(dist / archive)}  {archive}\n")
+        with patch.object(t, "verify_attestation"):
+            previous = t.previous_release(dist)
+            self.assertEqual(previous, {"version": "v1.0.0", "measurements_sha256": t.sha256(raw),
+                                        "revoked": []})
+            newer = t.release_metadata("v1.0.1", "prem-research/trustbase", "b" * 40)
+            t.package(inputs, self.base / "next", newer, previous)
+            t.verify_package(self.base / "next", previous_dist=dist)
+
     def test_release_chain_ordering_and_revocation_monotonicity(self):
         inputs = self.snapshot()
         first, second = self.base / "first", self.base / "second"

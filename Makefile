@@ -1,5 +1,5 @@
 PYTHON ?= python3
-PODVM_VERSION ?= 0.3.13
+PODVM_VERSION ?=
 EVALUATOR := tools/kata-policy-eval/target/release/kata-policy-eval
 
 .PHONY: test validate conformance integration evaluator admit
@@ -15,7 +15,7 @@ conformance:
 	$(PYTHON) tests/kata_conformance.py
 
 integration:
-	$(PYTHON) tests/live_integration.py --podvm-version "$(PODVM_VERSION)"
+	$(PYTHON) tests/live_integration.py $(if $(PODVM_VERSION),--podvm-version "$(PODVM_VERSION)")
 
 evaluator:
 	cargo build --release --locked --manifest-path tools/kata-policy-eval/Cargo.toml
