@@ -114,8 +114,7 @@ configured fleet dispatcher, does a separate publish job commit the import and
 push it together with the next `vX.Y.Z` tag in one atomic push, after the
 preceding tag has a published release. The tag push starts the ordinary release
 workflow, which reruns every check before signing. A failed check publishes
-nothing. The selected ownership and submission flow is described in
-[docs/policy-source-plan.md](docs/policy-source-plan.md).
+nothing.
 
 ### What the gate checks
 
@@ -143,6 +142,10 @@ can compare them with the guest's policy log.
 
 The gate does not prove that the real runtime emits exactly these requests. An
 acceptance run on hardware remains the authority for the deployed path.
+
+For each changed fleet candidate that passes the gate, the receiver writes
+`build/admission/admission-report.json`. It records the workload and exact TOML
+digest, approved rules digest, and each replayed request with its expected and observed verdict by the admission workflow upload as a 30-day Actions artifact.
 
 Run the gate locally with a Rust toolchain (rustup installs the pinned channel from
 `tools/kata-policy-eval/rust-toolchain.toml`):
