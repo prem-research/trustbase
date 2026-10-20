@@ -814,6 +814,9 @@ def cli(args):
     evaluator = None if args.static_only else KataPolicyEvaluator(args.evaluator)
     reports = []
     for profile in selected:
+        if config["policy"] == "genpolicy":
+            t.require(profile["podvm"] in config["floor"]["podvm_selections"],
+                      f"{profile['id']}: PodVM selection is not in the reviewed admission floor")
         raw = t.source_file(root, profile["initdata"]).read_bytes()
         reports.append(admit(raw, profile["id"], config, evaluator, args.static_only))
         print(f"Admitted {profile['id']} ({profile['initdata']})"

@@ -161,6 +161,10 @@ policy_data:
     fs_group: null
     shared: false
 floor:
+  # Each pair is reviewed before Fleet may register a workload on that PodVM.
+  podvm_selections:
+  - profile: h100-pcie-1-96g
+    version: "0.3.18"
   namespaces:
   - coco-poc
   pause_image: mcr.microsoft.com/oss/kubernetes/pause:3.6

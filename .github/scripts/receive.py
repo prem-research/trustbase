@@ -22,6 +22,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import admission
 import trustbase as t
@@ -65,11 +67,10 @@ def validate_payload(payload, config, manifest):
               f"candidate repository {payload['repository']} is not {source['repository']}")
     t.require(payload["path"] == source["path_prefix"] + payload["sha256"] + ".toml",
               f"candidate path must be {source['path_prefix']}<sha256>.toml")
-    profile = next((p for p in manifest["profiles"] if p["id"] == payload["workload"]), None)
-    t.require(profile is not None, f"{payload['workload']}: not registered in measurements.yaml")
-    t.require(payload["podvm"] == profile["podvm"],
-              f"{payload['workload']}: PodVM selection differs from measurements.yaml")
-    return profile
+    selections = config.get("floor", {}).get("podvm_selections", [])
+    t.require(payload["podvm"] in selections,
+              f"{payload['workload']}: PodVM selection is not in the reviewed admission floor")
+    return next((p for p in manifest["profiles"] if p["id"] == payload["workload"]), None)
 
 
 def fetch_candidate(payload, config, token):
@@ -86,33 +87,35 @@ def fetch_candidate(payload, config, token):
 
 
 def import_candidate(root, payload, raw):
-    """Place the TOML and repoint the workload registration; everything else stays byte-identical."""
+    """Place the TOML and create or update its registration within the reviewed floor."""
     root = Path(root)
     ident, digest = payload["workload"], payload["sha256"]
     manifest = t.validate(root)
-    profile = next((p for p in manifest["profiles"] if p["id"] == ident), None)
-    t.require(profile is not None, f"{ident}: not registered in measurements.yaml")
+    profile = validate_payload(payload, admission.load_config(root), manifest)
+    t.require(t.sha256(raw) == digest, "candidate bytes do not match the dispatched SHA-256")
+    t.initdata(raw, ident)
     t.require(digest not in {entry["sha256"] for entry in t.load_revoked(root)}, "candidate is revoked")
     target = f"init-data/{digest}.toml"
     path = root / target
     if path.exists() or path.is_symlink():
         t.require(not path.is_symlink() and path.read_bytes() == raw,
                   f"{target} already exists with different bytes")
-        if profile["initdata"] == target:
+        if profile is not None and profile["initdata"] == target and profile["podvm"] == payload["podvm"]:
             return False
     manifest_path = root / "measurements.yaml"
-    text = manifest_path.read_text()
-    pattern = re.compile(rf"(^  - id: {re.escape(ident)}\n    initdata: )init-data/[0-9a-f]{{64}}\.toml$", re.M)
-    t.require(len(pattern.findall(text)) == 1,
-              f"{ident}: cannot locate a single registration line in measurements.yaml")
+    previous = profile["initdata"] if profile is not None else None
+    if profile is None:
+        manifest["profiles"].append({"id": ident, "initdata": target, "podvm": payload["podvm"]})
+    else:
+        profile["initdata"] = target
+        profile["podvm"] = payload["podvm"]
     path.write_bytes(raw)
-    manifest_path.write_text(pattern.sub(lambda match: match.group(1) + target, text, count=1))
-    previous = profile["initdata"]
-    still_used = any(p["initdata"] == previous for p in manifest["profiles"] if p["id"] != ident)
-    if previous != target and not still_used:
+    manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
+    if previous is not None and previous != target:
         (root / previous).unlink()
     updated = t.validate(root)
-    t.require(next(p for p in updated["profiles"] if p["id"] == ident)["initdata"] == target,
+    t.require(next(p for p in updated["profiles"] if p["id"] == ident) ==
+              {"id": ident, "initdata": target, "podvm": payload["podvm"]},
               "registration did not take effect")
     return True
 
@@ -241,8 +244,10 @@ def apply_prepared():
     run(["git", "apply", str(patch)], cwd=ROOT)
     manifest = t.validate(ROOT)
     profile = next((p for p in manifest["profiles"] if p["id"] == payload["workload"]), None)
-    t.require(profile is not None and profile["initdata"] == f"init-data/{payload['sha256']}.toml",
+    t.require(profile is not None and profile["initdata"] == f"init-data/{payload['sha256']}.toml"
+              and profile["podvm"] == payload["podvm"],
               "prepared import does not register the dispatched candidate")
+    validate_payload(payload, admission.load_config(ROOT), manifest)
     t.require(t.sha256((ROOT / profile["initdata"]).read_bytes()) == payload["sha256"],
               "prepared candidate bytes do not match the dispatch")
 

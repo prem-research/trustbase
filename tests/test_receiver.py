@@ -12,6 +12,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import admission
 import trustbase as t
@@ -24,6 +26,9 @@ QWEN_ID = "qwen38-27b-h100-pcie-1-96g"
 QWEN_PATH = "init-data/575f884446deeca9c042dfa9f69c1574e0272700e373ac2eb908a9d05acb5526.toml"
 CANDIDATE = (t.ROOT / QWEN_PATH).read_bytes() + b"# candidate revision\n"
 CONFIG = admission.load_config(t.ROOT)
+NEW_ID = "new-model-h100-pcie-1-96g"
+NEW_CANDIDATE = CANDIDATE.replace(f'"id" = "{QWEN_ID}"'.encode(),
+                                  f'"id" = "{NEW_ID}"'.encode(), 1)
 
 
 def payload(**overrides):
@@ -65,6 +70,11 @@ class ReceiverTests(unittest.TestCase):
         path.write_bytes(t.json_bytes({"action": "init-data-candidate", "client_payload": payload(**overrides)}))
         return path
 
+    def allow_selection(self, selection):
+        config = admission.load_config(self.root)
+        config["floor"]["podvm_selections"].append(selection)
+        (self.root / "admission.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+
     def test_payload_schema_and_event_type(self):
         self.assertEqual(receive.payload_from_event(self.event()), payload())
         path = Path(self.temporary.name) / "event.json"
@@ -77,15 +87,16 @@ class ReceiverTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(t.Error):
                 receive.payload_from_event(path)
 
-    def test_payload_must_match_admission_rules_and_manifest(self):
+    def test_payload_must_match_source_and_reviewed_podvm_floor(self):
         manifest = t.validate(t.ROOT)
         self.assertEqual(receive.validate_payload(payload(), CONFIG, manifest)["id"], QWEN_ID)
+        self.assertIsNone(receive.validate_payload(payload(workload=NEW_ID), CONFIG, manifest))
         for change, message in (
             ({"repository": "someone/else"}, "not prem-research/coco-fleet"),
             ({"path": "other/" + t.sha256(CANDIDATE) + ".toml"}, "candidates/<sha256>.toml"),
             ({"path": "candidates/" + "0" * 64 + ".toml"}, "candidates/<sha256>.toml"),
-            ({"workload": "model-router"}, "not registered in measurements.yaml"),
-            ({"podvm": {"profile": "h100-pcie-1-96g", "version": "0.3.19"}}, "PodVM selection differs"),
+            ({"podvm": {"profile": "h100-pcie-1-96g", "version": "0.3.19"}}, "reviewed admission floor"),
+            ({"podvm": {"profile": "other", "version": "0.3.18"}}, "reviewed admission floor"),
         ):
             with self.subTest(change=change), self.assertRaisesRegex(t.Error, message):
                 receive.validate_payload(payload(**change), CONFIG, manifest)
@@ -111,24 +122,51 @@ class ReceiverTests(unittest.TestCase):
         self.assertFalse((self.root / QWEN_PATH).exists())
         self.assertEqual((self.root / target).read_bytes(), CANDIDATE)
         text = (self.root / "measurements.yaml").read_text()
-        self.assertIn('version: "0.3.18"', text)
+        self.assertIn("version: 0.3.18", text)
         self.assertEqual(text.count("initdata:"), 1)
         self.assertFalse(receive.import_candidate(self.root, payload(), CANDIDATE))
-        with self.assertRaisesRegex(t.Error, "different bytes"):
+        with self.assertRaisesRegex(t.Error, "do not match the dispatched SHA-256"):
             receive.import_candidate(self.root, payload(), CANDIDATE + b"\n")
 
-    def test_import_refuses_revoked_and_unregistered(self):
+    def test_import_refuses_revoked_and_wrong_workload_identity(self):
         (self.root / "revoked.yaml").write_text(
             f"schema_version: 1\nentries:\n  - id: {QWEN_ID}\n    sha256: '{t.sha256(CANDIDATE)}'\n    reason: test\n")
         with self.assertRaisesRegex(t.Error, "revoked"):
             receive.import_candidate(self.root, payload(), CANDIDATE)
         (self.root / "revoked.yaml").write_text("schema_version: 1\nentries: []\n")
-        with self.assertRaisesRegex(t.Error, "not registered"):
+        with self.assertRaisesRegex(t.Error, "data.id must exactly match"):
             receive.import_candidate(self.root, payload(workload="other"), CANDIDATE)
-        (self.root / "measurements.yaml").write_text(
-            (self.root / "measurements.yaml").read_text().replace("    initdata:", "    initdata:  "))
-        with self.assertRaisesRegex(t.Error, "single registration line"):
-            receive.import_candidate(self.root, payload(), CANDIDATE)
+
+    def test_import_new_workload_and_update_podvm_selection(self):
+        new_payload = payload(workload=NEW_ID, sha256=t.sha256(NEW_CANDIDATE),
+                              path=f"candidates/{t.sha256(NEW_CANDIDATE)}.toml")
+        before = t.validate(self.root)["profiles"][0].copy()
+        self.assertTrue(receive.import_candidate(self.root, new_payload, NEW_CANDIDATE))
+        profiles = t.validate(self.root)["profiles"]
+        self.assertEqual(profiles[0], before)
+        self.assertEqual(profiles[1], {"id": NEW_ID,
+            "initdata": f"init-data/{t.sha256(NEW_CANDIDATE)}.toml",
+            "podvm": new_payload["podvm"]})
+        self.assertFalse(receive.import_candidate(self.root, new_payload, NEW_CANDIDATE))
+
+        updated_selection = {"profile": "h100-pcie-1-96g", "version": "0.3.19"}
+        changed = payload(workload=NEW_ID, sha256=t.sha256(NEW_CANDIDATE),
+                          path=new_payload["path"], podvm=updated_selection)
+        with self.assertRaisesRegex(t.Error, "reviewed admission floor"):
+            receive.import_candidate(self.root, changed, NEW_CANDIDATE)
+        self.allow_selection(updated_selection)
+        self.assertTrue(receive.import_candidate(self.root, changed, NEW_CANDIDATE))
+        self.assertEqual(t.validate(self.root)["profiles"][1]["podvm"], updated_selection)
+        self.assertFalse(receive.import_candidate(self.root, changed, NEW_CANDIDATE))
+
+    def test_release_admission_rejects_registration_outside_podvm_floor(self):
+        manifest = t.validate(self.root)
+        manifest["profiles"][0]["podvm"]["version"] = "0.3.19"
+        (self.root / "measurements.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+        args = SimpleNamespace(root=self.root, config=None, all=True, ids=[],
+                               static_only=True, evaluator=None, report=None)
+        with self.assertRaisesRegex(t.Error, "reviewed admission floor"):
+            admission.cli(args)
 
     def test_next_tag(self):
         listing = {"tags?per_page=100&page=1": [{"name": n} for n in ("v1.2.3", "v1.10.0", "v2.0.0-rc.1", "dev", "v1.9.9")]}
@@ -203,11 +241,13 @@ class ReceiverTests(unittest.TestCase):
         subprocess.run(["git", "clone", "-q", str(self.root), str(checkout)], check=True)
         output = Path(self.temporary.name) / "out"
         output.mkdir()
-        candidate = payload()
+        candidate = payload(workload=NEW_ID, sha256=t.sha256(NEW_CANDIDATE),
+                            path=f"candidates/{t.sha256(NEW_CANDIDATE)}.toml")
         env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_SHA": "a" * 40,
-               "GITHUB_EVENT_PATH": str(self.event()), "RELEASE_TOKEN": "release"}
+               "GITHUB_EVENT_PATH": str(self.event(workload=NEW_ID, sha256=candidate["sha256"],
+                                                        path=candidate["path"])), "RELEASE_TOKEN": "release"}
         with patch.dict(os.environ, env, clear=True), patch.object(receive, "OUTPUT", output):
-            receive.import_candidate(self.root, candidate, CANDIDATE)
+            receive.import_candidate(self.root, candidate, NEW_CANDIDATE)
             receive.prepared_change(self.root, candidate, env["GITHUB_REPOSITORY"], "v1.0.1", "import candidate")
             with patch.object(receive, "ROOT", checkout):
                 receive.apply_prepared()
@@ -215,6 +255,7 @@ class ReceiverTests(unittest.TestCase):
                     receive.publish_prepared()
         self.assertEqual(t.sha256((checkout / "init-data" / (candidate["sha256"] + ".toml")).read_bytes()),
                          candidate["sha256"])
+        self.assertEqual(t.validate(checkout)["profiles"][-1]["id"], NEW_ID)
         self.assertEqual(publish.call_args.args[1:4], ("prem-research/trustbase", "release", "v1.0.1"))
 
     def test_main_already_imported_is_a_noop(self):

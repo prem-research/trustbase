@@ -79,6 +79,26 @@
           "minLength": 1,
           "type": "string"
         },
+        "podvm_selections": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "profile": {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+                "type": "string"
+              },
+              "version": {
+                "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+                "type": "string"
+              }
+            },
+            "required": ["profile", "version"],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
         "privileged_containers": {
           "additionalProperties": {
             "$ref": "#/$defs/repository"
@@ -92,6 +112,7 @@
       "required": [
         "namespaces",
         "pause_image",
+        "podvm_selections",
         "image_repositories",
         "privileged_containers",
         "device_binds",

@@ -91,13 +91,21 @@ The fleet repository commits each generated Init-Data candidate and sends a
 workload, and intended PodVM profile and version. The dispatch is one-way and
 proves only delivery. The receiver (`.github/workflows/admit.yml`,
 `.github/scripts/receive.py`) always runs from this repository's default branch,
-validates the payload against `schemas/dispatch.schema.json`, requires it to match
-`admission.yaml` and `measurements.yaml`, confirms the commit belongs to the
-fleet default branch, fetches the file at exactly that commit, and requires the
-bytes to hash to the dispatched SHA-256. It then imports the TOML, repoints the
-workload, removes the superseded file, and runs the admission gate. Revoked
-digests are refused before import; a candidate that is already registered is
-acknowledged without a second import.
+validates the payload against `schemas/dispatch.schema.json`, requires the selected
+PodVM profile and exact version to be listed in the reviewed `admission.yaml`
+floor, confirms the commit belongs to the fleet default branch, fetches the file
+at exactly that commit, and requires the
+bytes to hash to the dispatched SHA-256. It checks that `[data].id` matches the
+dispatched workload, then imports the TOML and creates or updates its
+`measurements.yaml` registration. An update may also change the workload's PodVM
+selection within the reviewed floor. The receiver removes a superseded TOML and
+runs the admission gate. Revoked digests are refused before import; a candidate
+whose digest and PodVM selection are already registered is acknowledged without
+a second import. A PodVM version change can reuse the same Init-Data bytes; the
+registration and resolved PodVM measurements still change. A new PodVM profile
+or version needs a reviewed floor change.
+New model IDs and model-specific arguments can flow automatically when the
+resulting candidate satisfies the floor and policy checks.
 
 The pipeline is the dry run: the prepare job resolves, packages, and verifies the
 would-be release and uploads it with the admission report as a workflow
@@ -112,8 +120,10 @@ nothing. The selected ownership and submission flow is described in
 ### What the gate checks
 
 `admission.py` runs on the exact TOML bytes. `admission.yaml` holds only global
-rules; everything specific to the pod is read from the candidate itself, so a
-fleet change that stays within the floor flows through without a Trustbase edit.
+rules and allowed PodVM selections; everything specific to the pod is read from
+the candidate itself, so a fleet change that stays within the floor flows through
+without a Trustbase edit. Release preparation still resolves the selected PodVM
+to authenticated measurements and verifies the packaged result before publishing.
 
 The static half splits `policy.rego` into the reviewed rules text and the
 generated `policy_data` object. The rules text must hash to an accepted digest,
