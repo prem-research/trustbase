@@ -17,7 +17,8 @@ import admission as a
 import trustbase as t
 
 QWEN_ID = "qwen38-27b-h100-pcie-1-96g"
-QWEN = t.ROOT / "init-data/0932f8125fe9645a3e8d04a3940b79a5f955226e98ef1427a46800b12ccba47f.toml"
+# Whatever TOML the fleet last imported, so imports do not break the suite.
+QWEN = t.ROOT / next(p["initdata"] for p in t.validate(t.ROOT)["profiles"] if p["id"] == QWEN_ID)
 EXAMPLE = t.ROOT / "examples/init-data/f541d90ef872c2822fe3f73b83b5326782c845d9a13469c18a2d1d3eb8a8ee20.toml"
 CONFIG = a.load_config(t.ROOT)
 EXAMPLES_CONFIG = a.load_config(t.ROOT / "examples")
