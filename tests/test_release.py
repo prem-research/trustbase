@@ -142,6 +142,7 @@ class ReleaseTests(unittest.TestCase):
                     if command[:3] == ["gh", "release", "download"]:
                         previous.mkdir()
                         (previous / "measurements.json").write_text("{}")
+                        (previous / t.BUNDLE_NAME).write_text("{}")
                 with patch.object(release, "api", return_value=listing), \
                         patch.object(release, "run", side_effect=download) as run, \
                         patch.object(t, "verify_package", return_value=verified) as verify:
@@ -150,29 +151,24 @@ class ReleaseTests(unittest.TestCase):
                 self.assertEqual(verify.call_args.kwargs, {"require_provenance": True})
                 self.assertEqual(output.read_text(), f"previous={previous}\n")
 
-    def test_previous_legacy_release_is_verified_per_asset(self):
+    def test_previous_legacy_release_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "output"
             previous = Path(temporary) / "previous"
             env = {**self.env, "GITHUB_OUTPUT": str(output)}
-            catalog = t.json_bytes({"release": t.release_metadata("v1.0.0", "prem-research/trustbase", "c" * 40)})
 
             def download(command):
                 if command[:3] == ["gh", "release", "download"]:
                     previous.mkdir()
                     for name in ("measurements.json", "SHA256SUMS", "trustbase-inputs-v1.0.0.tar.gz"):
-                        (previous / name).write_bytes(catalog)
+                        (previous / name).write_bytes(b"untrusted")
             with patch.dict(os.environ, env, clear=True), patch.object(release, "PREVIOUS", previous), \
                     patch.object(release, "api", return_value=self.releases("v1.0.0")), \
-                    patch.object(release, "run", side_effect=download) as run, \
-                    patch.object(t, "verify_package", return_value={"release": {"version": "v1.0.0"}}) as verify:
-                release.previous()
-            verifies = [c.args[0] for c in run.call_args_list if c.args[0][:3] == ["gh", "attestation", "verify"]]
-            self.assertEqual(len(verifies), 3)
-            for command in verifies:
-                self.assertEqual(command[command.index("--source-digest") + 1], "c" * 40)
-                self.assertEqual(command[command.index("--source-ref") + 1], "refs/tags/v1.0.0")
-            self.assertEqual(verify.call_args.kwargs, {})
+                    patch.object(release, "run", side_effect=download) as run:
+                with self.assertRaisesRegex(t.Error, "legacy Trustbase release format is unsupported"):
+                    release.previous()
+            self.assertEqual(len(run.call_args_list), 1)
+            self.assertEqual(output.read_text(), "")
 
 
 if __name__ == "__main__":

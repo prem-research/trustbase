@@ -550,12 +550,9 @@ def check_succession(previous, release, revoked):
         require(not dropped, f"revocations from {previous['version']} were dropped: {sorted(dropped)}")
 
 
-def catalog(inputs, release, previous=None, trusted_root=None, legacy=False):
+def catalog(inputs, release, previous=None, trusted_root=None):
     manifest, lock, documents = read_snapshot(inputs, trusted_root)
     revoked = load_revoked(inputs)
-    require(not legacy or not (Path(inputs) / "revoked.yaml").exists(),
-            "legacy catalogs cannot carry revocations")
-    require(not legacy or previous is None, "legacy catalogs cannot reference a previous release")
     check_succession(previous, release, revoked)
     workloads = {}
     for profile in sorted(manifest["profiles"], key=lambda p: p["id"]):
@@ -585,9 +582,8 @@ def catalog(inputs, release, previous=None, trusted_root=None, legacy=False):
         "release": dict(release),
         "workloads": workloads,
     }
-    if not legacy:
-        result["release"]["previous"] = previous_link(previous)
-        result["revoked"] = revoked
+    result["release"]["previous"] = previous_link(previous)
+    result["revoked"] = revoked
     check_schema(result, "measurements.schema.json")
     return result
 
@@ -629,10 +625,10 @@ def package(inputs, output, release, previous=None, trusted_root=None, require_w
 def previous_release(dist, trusted_root=None):
     """Read a downloaded release as the predecessor of the one being built."""
     dist = Path(dist)
-    result = verify_package(dist, trusted_root, require_provenance=(dist / BUNDLE_NAME).exists())
+    result = verify_package(dist, trusted_root, require_provenance=True)
     return {"version": result["release"]["version"],
             "measurements_sha256": hash_file(source_file(dist, "measurements.json")),
-            "revoked": result.get("revoked", [])}
+            "revoked": result["revoked"]}
 
 
 def unpack(archive_path, destination):
@@ -696,13 +692,11 @@ def verify_chain(result, previous_dist, trusted_root=None):
 def verify_package(dist, trusted_root=None, require_workloads=False, require_provenance=False,
                    min_version=None, max_age=None, previous_dist=None):
     dist = Path(dist)
+    names = {p.name for p in dist.iterdir()}
+    require("SHA256SUMS" not in names, "legacy Trustbase release format is unsupported")
     raw_catalog = source_file(dist, "measurements.json").read_bytes()
     result = load_json(raw_catalog)
-    names = {p.name for p in dist.iterdir()}
-    legacy = "SHA256SUMS" in names
-    if not legacy:
-        # Legacy catalogs follow the schema of the revision that built them, not this one.
-        check_schema(result, "measurements.schema.json")
+    check_schema(result, "measurements.schema.json")
     require(not require_workloads or result["workloads"],
             "publication requires at least one production workload")
     release = release_metadata(**{
@@ -711,28 +705,14 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
         "revision": result["release"]["source_revision"],
     })
     archive = archive_name(release)
-    if legacy:
-        # Releases published before the chained format: checksums plus per-asset attestations.
-        # Their catalogs cannot be replayed by this revision; rebuild them from source_revision.
-        require("previous" not in result["release"] and "revoked" not in result,
-                "legacy release carries chained-format fields")
-        require(not require_provenance, "legacy releases have no provenance bundle; verify their "
-                                        "per-asset attestations with gh attestation verify")
-        sums = parse_sums(source_file(dist, "SHA256SUMS").read_bytes())
-        require(set(sums) == {"measurements.json", archive}, "unexpected release checksums")
-        require(names == set(sums) | {"SHA256SUMS"}, "unexpected release assets")
-        for name, digest in sums.items():
-            require(hash_file(source_file(dist, name)) == digest, f"release checksum mismatch: {name}")
-        previous = None
-    else:
-        require(names in ({"measurements.json", archive}, {"measurements.json", archive, BUNDLE_NAME}),
-                "unexpected release assets")
-        require("previous" in result["release"] and "revoked" in result,
-                "release lacks the previous/revoked chain fields")
-        previous = result["release"]["previous"]
-        revoked = {entry["sha256"] for entry in result["revoked"]}
-        referenced = {w["initdata"]["sha256"] for w in result["workloads"].values()}
-        require(not revoked & referenced, "revoked Init-Data is still referenced by the catalog")
+    require(names in ({"measurements.json", archive}, {"measurements.json", archive, BUNDLE_NAME}),
+            "unexpected release assets")
+    require("previous" in result["release"] and "revoked" in result,
+            "release lacks the previous/revoked chain fields")
+    previous = result["release"]["previous"]
+    revoked = {entry["sha256"] for entry in result["revoked"]}
+    referenced = {w["initdata"]["sha256"] for w in result["workloads"].values()}
+    require(not revoked & referenced, "revoked Init-Data is still referenced by the catalog")
     if min_version is not None:
         floor, actual = stable_version(min_version), stable_version(release["version"])
         require(floor is not None, f"invalid minimum version: {min_version!r}")
@@ -745,10 +725,6 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
         if max_age is not None:
             require(age <= max_age,
                     f"release signing event is {int(age)} s old, above the maximum {int(max_age)} s")
-    if previous_dist is not None:
-        require(not legacy, "legacy releases are not chained")
-    if legacy:
-        return result
     with tempfile.TemporaryDirectory(prefix="trustbase-verify-") as temporary:
         inputs = Path(temporary)
         unpack(dist / archive, inputs)

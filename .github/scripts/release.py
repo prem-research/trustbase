@@ -103,17 +103,7 @@ def previous():
         latest = max(tags, key=lambda value: t.Version(value[1:]))
         t.require(not PREVIOUS.exists(), f"{PREVIOUS} already exists")
         run(["gh", "release", "download", latest, "--repo", repository, "--dir", str(PREVIOUS)])
-        if (PREVIOUS / "SHA256SUMS").exists():
-            # Legacy release: no bundle asset, so authenticate every asset through the API.
-            catalog = t.load_json((PREVIOUS / "measurements.json").read_bytes())
-            revision = catalog["release"]["source_revision"]
-            for asset in sorted(PREVIOUS.iterdir()):
-                run(["gh", "attestation", "verify", str(asset), "--repo", repository,
-                     "--source-ref", "refs/tags/" + latest, "--source-digest", revision,
-                     "--signer-workflow", repository + "/.github/workflows/release.yml"])
-            result = t.verify_package(PREVIOUS)
-        else:
-            result = t.verify_package(PREVIOUS, require_provenance=True)
+        result = t.verify_package(PREVIOUS, require_provenance=True)
         t.require(result["release"]["version"] == latest, "downloaded release names another version")
         output.write(f"previous={PREVIOUS}\n")
         print(f"Previous release {latest} verified")

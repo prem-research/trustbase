@@ -521,66 +521,39 @@ class PackagingTests(Workspace):
             with self.assertRaisesRegex(t.Error, "maximum age requires provenance"):
                 t.verify_package(dist, max_age=10)
             (dist / "SHA256SUMS").write_text("")
-            with self.assertRaisesRegex(t.Error, "chained-format fields"):
+            with self.assertRaisesRegex(t.Error, "legacy Trustbase release format is unsupported"):
                 t.verify_package(dist)
 
-    def legacy_dist(self, inputs, name="legacy"):
-        with patch.object(t, "verify_attestation"):
-            result = t.catalog(inputs, RELEASE, legacy=True)
-        dist = self.base / name
+    def test_self_hashed_legacy_release_is_rejected(self):
+        dist = self.base / "legacy"
         dist.mkdir()
-        assets = {"measurements.json": t.json_bytes(result),
-                  "trustbase-inputs-v1.0.0.tar.gz": t.archive_bytes(inputs)}
+        assets = {"measurements.json": t.json_bytes({"release": RELEASE, "workloads": {}}),
+                  "trustbase-inputs-v1.0.0.tar.gz": b"not an archive"}
         for key, raw in assets.items():
             (dist / key).write_bytes(raw)
         (dist / "SHA256SUMS").write_text("".join(f"{t.sha256(raw)}  {key}\n"
                                                  for key, raw in sorted(assets.items())))
-        return dist
-
-    def test_legacy_release_still_verifies_without_chain_fields(self):
-        dist = self.legacy_dist(self.snapshot())
-        with patch.object(t, "verify_attestation"):
-            result = t.verify_package(dist)
-            self.assertNotIn("previous", result["release"])
-            self.assertNotIn("revoked", result)
-            with self.assertRaisesRegex(t.Error, "legacy releases have no provenance bundle"):
-                t.verify_package(dist, require_provenance=True)
-            with self.assertRaisesRegex(t.Error, "legacy releases are not chained"):
-                t.verify_package(dist, previous_dist=dist)
-            (dist / "SHA256SUMS").write_text("0" * 64 + "  measurements.json\n")
-            with self.assertRaises(t.Error):
-                t.verify_package(dist)
-
-    def test_legacy_predecessor_in_an_older_catalog_format_still_chains(self):
-        inputs = self.snapshot()
-        dist = self.legacy_dist(inputs)
-        # v0.0.7 predates `initdata.path` and `initdata.sha256`.
-        doc = t.load_json((dist / "measurements.json").read_bytes())
-        for workload in doc["workloads"].values():
-            del workload["initdata"]["path"], workload["initdata"]["sha256"]
-        raw = t.json_bytes(doc)
-        (dist / "measurements.json").write_bytes(raw)
-        archive = "trustbase-inputs-v1.0.0.tar.gz"
-        (dist / "SHA256SUMS").write_text(f"{t.sha256(raw)}  measurements.json\n"
-                                         f"{t.hash_file(dist / archive)}  {archive}\n")
-        with patch.object(t, "verify_attestation"):
-            previous = t.previous_release(dist)
-            self.assertEqual(previous, {"version": "v1.0.0", "measurements_sha256": t.sha256(raw),
-                                        "revoked": []})
-            newer = t.release_metadata("v1.0.1", "prem-research/trustbase", "b" * 40)
-            t.package(inputs, self.base / "next", newer, previous)
-            t.verify_package(self.base / "next", previous_dist=dist)
+        for kwargs in ({}, {"require_provenance": True}, {"previous_dist": dist}):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(
+                    t.Error, "legacy Trustbase release format is unsupported"):
+                t.verify_package(dist, **kwargs)
+        with self.assertRaisesRegex(t.Error, "legacy Trustbase release format is unsupported"):
+            t.previous_release(dist)
 
     def test_release_chain_ordering_and_revocation_monotonicity(self):
         inputs = self.snapshot()
         first, second = self.base / "first", self.base / "second"
-        with patch.object(t, "verify_attestation"):
+        with patch.object(t, "verify_attestation"), \
+                patch.object(t, "verify_release_provenance",
+                             return_value=t.datetime.datetime.now(t.datetime.timezone.utc)):
             t.package(inputs, first, RELEASE)
+            (first / t.BUNDLE_NAME).write_text("test bundle")
             previous = t.previous_release(first)
             self.assertEqual(previous["version"], "v1.0.0")
             self.assertEqual(previous["revoked"], [])
             newer = t.release_metadata("v1.0.1", "prem-research/trustbase", "b" * 40)
             result = t.package(inputs, second, newer, previous)
+            (second / t.BUNDLE_NAME).write_text("test bundle")
             self.assertEqual(result["release"]["previous"],
                              {"version": "v1.0.0", "measurements_sha256": t.hash_file(first / "measurements.json")})
             t.verify_package(second, previous_dist=first)
@@ -619,8 +592,6 @@ class PackagingTests(Workspace):
             result = t.package(inputs, self.base / "dist", RELEASE)
             self.assertEqual(result["revoked"], [{"id": "old", "sha256": "0" * 64, "reason": "superseded"}])
             t.verify_package(self.base / "dist")
-            with self.assertRaisesRegex(t.Error, "legacy catalogs cannot carry revocations"):
-                t.catalog(inputs, RELEASE, legacy=True)
             doc = t.load_json((self.base / "dist" / "measurements.json").read_bytes())
             doc["revoked"] = []
             (self.base / "dist" / "measurements.json").write_bytes(t.json_bytes(doc))

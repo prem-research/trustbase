@@ -245,7 +245,7 @@ repository; `--root examples` explicitly selects examples.
 | `validate` | Offline manifest and TOML validation |
 | `resolve` | Verify selected PodVM releases and freeze all inputs |
 | `measure` | Generate only the catalog from frozen inputs |
-| `package` | Generate catalog, deterministic archive, and checksums |
+| `package` | Generate catalog and deterministic input archive |
 | `verify` | Check payloads, Sigstore provenance, release chain, and exact regeneration |
 | `annotation` | Encode one workload's original TOML for Kata |
 | `admit` | Run the admission gate on registered workloads |
@@ -270,8 +270,11 @@ GitHub's automatic source archives are separate. The bundle is the output of the
 release workflow's `attest-build-provenance` step, so the same attestation is also
 discoverable through GitHub's API; publishing it with the release lets verifiers
 work from the three files alone. Releases published before this format carried a
-`SHA256SUMS` file and per-asset attestations instead; `verify` still accepts them
-and reports them as legacy.
+`SHA256SUMS` file and per-asset attestations instead. The current `verify` command
+rejects those legacy Trustbase releases. Historical verification requires checking
+each old asset against its per-asset attestation and the expected tag, source
+commit, repository, and signer workflow. The current release chain can be checked
+back to `v0.0.10`; walking its older `v0.0.7` link requires that separate procedure.
 
 The catalog follows `schemas/measurements.schema.json` and carries only the
 values a relying party matches against evidence. At `workloads[<id>]`:
