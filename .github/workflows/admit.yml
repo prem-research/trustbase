@@ -35,7 +35,7 @@ jobs:
           elevate=()
           if (( EUID != 0 )); then elevate=(sudo -n); fi
           "${elevate[@]}" apt-get update
-          "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl git make tar
+          "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl gcc git libc6-dev make tar
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
