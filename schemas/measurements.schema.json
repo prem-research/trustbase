@@ -1,0 +1,297 @@
+{
+  "$defs": {
+    "sha384": {
+      "pattern": "^[0-9a-f]{96}$",
+      "type": "string"
+    },
+    "snpMeasurements": {
+      "additionalProperties": {
+        "$ref": "#/$defs/sha384"
+      },
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/vcpuType"
+      },
+      "type": "object"
+    },
+    "tdxMeasurements": {
+      "additionalProperties": false,
+      "properties": {
+        "mr_td": {
+          "$ref": "#/$defs/sha384"
+        },
+        "rtmr_0": {
+          "$ref": "#/$defs/sha384"
+        },
+        "rtmr_1": {
+          "$ref": "#/$defs/sha384"
+        },
+        "rtmr_2": {
+          "$ref": "#/$defs/sha384"
+        }
+      },
+      "required": [
+        "mr_td",
+        "rtmr_0",
+        "rtmr_1",
+        "rtmr_2"
+      ],
+      "type": "object"
+    },
+    "vcpuType": {
+      "enum": [
+        "EPYC",
+        "EPYC-Genoa",
+        "EPYC-Genoa-v1",
+        "EPYC-IBPB",
+        "EPYC-Milan",
+        "EPYC-Milan-v1",
+        "EPYC-Milan-v2",
+        "EPYC-Rome",
+        "EPYC-Rome-v1",
+        "EPYC-Rome-v2",
+        "EPYC-Rome-v3",
+        "EPYC-Turin",
+        "EPYC-v1",
+        "EPYC-v2",
+        "EPYC-v3",
+        "EPYC-v4"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "release": {
+      "additionalProperties": false,
+      "properties": {
+        "previous": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "measurements_sha256": {
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "version": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "version",
+                "measurements_sha256"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "source_repository": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "source_repository",
+        "source_revision"
+      ],
+      "type": "object"
+    },
+    "revoked": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "reason": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "sha256",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema": {
+      "format": "uri",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "workloads": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "initdata": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "algorithm": {
+                      "const": "sha256"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "digest": {
+                      "maxLength": 64,
+                      "minLength": 64
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "algorithm": {
+                      "const": "sha384"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "digest": {
+                      "maxLength": 96,
+                      "minLength": 96
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "algorithm": {
+                      "const": "sha512"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "digest": {
+                      "maxLength": 128,
+                      "minLength": 128
+                    }
+                  }
+                }
+              }
+            ],
+            "properties": {
+              "algorithm": {
+                "enum": [
+                  "sha256",
+                  "sha384",
+                  "sha512"
+                ]
+              },
+              "digest": {
+                "pattern": "^([0-9a-f]{64}|[0-9a-f]{96}|[0-9a-f]{128})$",
+                "type": "string"
+              },
+              "host_data": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "mr_config_id": {
+                "pattern": "^[0-9a-f]{96}$",
+                "type": "string"
+              },
+              "path": {
+                "pattern": "^init-data/[0-9a-f]{64}\\.toml$",
+                "type": "string"
+              },
+              "sha256": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "algorithm",
+              "digest",
+              "path",
+              "sha256",
+              "host_data",
+              "mr_config_id"
+            ],
+            "type": "object"
+          },
+          "releases": {
+            "additionalProperties": {
+              "additionalProperties": false,
+              "anyOf": [
+                {
+                  "required": [
+                    "snp"
+                  ]
+                },
+                {
+                  "required": [
+                    "tdx"
+                  ]
+                }
+              ],
+              "properties": {
+                "snp": {
+                  "$ref": "#/$defs/snpMeasurements"
+                },
+                "tdx": {
+                  "$ref": "#/$defs/tdxMeasurements"
+                }
+              },
+              "type": "object"
+            },
+            "minProperties": 1,
+            "propertyNames": {
+              "pattern": "^v?(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\\+[0-9A-Za-z.-]+)?$"
+            },
+            "type": "object"
+          }
+        },
+        "required": [
+          "initdata",
+          "releases"
+        ],
+        "type": "object"
+      },
+      "propertyNames": {
+        "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "schema",
+    "release",
+    "workloads"
+  ],
+  "title": "Trustbase workload reference measurements",
+  "type": "object"
+}

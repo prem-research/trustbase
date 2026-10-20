@@ -1,0 +1,213 @@
+name: Trustbase measurements and release
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A tag run must finish before the next tag downloads its predecessor.
+  group: trustbase-${{ github.ref_type == 'tag' && 'release' || github.event.pull_request.number || github.ref }}
+  queue: max
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  generate:
+    name: Build and verify release candidate
+    runs-on:
+      group: arc-runners
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - name: Install checkout dependencies
+        run: |
+          elevate=()
+          if (( EUID != 0 )); then elevate=(sudo -n); fi
+          "${elevate[@]}" apt-get update
+          "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl gcc git libc6-dev make tar
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python and GitHub CLI dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          bash .github/scripts/install-gh.sh
+      - name: Validate authoring inputs and run offline tests
+        run: make validate test
+      - name: Install the admission evaluator's Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: "1.95"
+      - name: Cache the admission evaluator build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            tools/kata-policy-eval/target
+          key: kata-policy-eval-${{ runner.os }}-${{ hashFiles('tools/kata-policy-eval/Cargo.lock', 'tools/kata-policy-eval/rust-toolchain.toml', 'tools/kata-policy-eval/src/**') }}
+      - name: Build the evaluator and run the admission gate on every registered workload
+        run: make admit
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.12"
+          cache: false
+      - name: Verify conformance against pinned Kata code
+        run: make conformance
+      - name: Verify published CPU and NVIDIA PodVM integration
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: make integration
+      - name: Select version and enforce publication inputs
+        id: version
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          python .github/scripts/release.py version
+          if [[ -n "$RELEASE_TAG" ]]; then
+            python trustbase.py validate --require-workloads
+          fi
+      - name: Fetch and verify the previous release
+        id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/release.py previous
+      - name: Resolve and freeze verified PodVM inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python trustbase.py resolve --output build/inputs
+      - name: Package release candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.value }}
+          PREVIOUS: ${{ steps.previous.outputs.previous }}
+        run: |
+          if [[ -n "$PREVIOUS" ]]; then chain=(--previous-dist "$PREVIOUS"); else chain=(--no-previous); fi
+          python trustbase.py package \
+            --inputs build/inputs --output dist \
+            --release-version "$VERSION" \
+            --source-repository "$GITHUB_REPOSITORY" \
+            --source-revision "$GITHUB_SHA" "${chain[@]}"
+          python trustbase.py verify --dist dist
+      - name: Upload release assets for review
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trustbase-release-assets
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: generate
+    runs-on:
+      group: arc-runners
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Install checkout dependencies
+        run: |
+          elevate=()
+          if (( EUID != 0 )); then elevate=(sudo -n); fi
+          "${elevate[@]}" apt-get update
+          "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl git make tar
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python and GitHub CLI dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          bash .github/scripts/install-gh.sh
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: trustbase-release-assets
+          path: dist
+      - name: Verify candidate and reject existing releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python trustbase.py verify --dist dist --require-workloads
+          python .github/scripts/release.py check
+      - name: Attest release payloads
+        id: attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/measurements.json
+            dist/*.tar.gz
+      - name: Attach the Sigstore bundle to the release set
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE" dist/provenance.sigstore.json
+      - name: Verify the signed release set and publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python trustbase.py verify --dist dist --require-provenance --require-workloads
+          python .github/scripts/release.py publish
+      - name: Upload published assets
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trustbase-published-assets
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  pages:
+    name: Deploy measurements to GitHub Pages
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: publish
+    runs-on:
+      group: arc-runners
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: trustbase-pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: trustbase-published-assets
+          path: dist
+      - name: Prepare measurements and provenance for GitHub Pages
+        run: |
+          mkdir _site
+          cp dist/measurements.json dist/provenance.sigstore.json _site/
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: _site
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

@@ -1,0 +1,383 @@
+{
+  "$defs": {
+    "memory": {
+      "pattern": "^[1-9][0-9]*[MG]$",
+      "type": "string"
+    },
+    "profileId": {
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "type": "string"
+    },
+    "sevModels": {
+      "additionalProperties": {
+        "$ref": "#/$defs/snpRecord"
+      },
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/vcpuType"
+      },
+      "type": "object"
+    },
+    "sha384": {
+      "pattern": "^[0-9a-f]{96}$",
+      "type": "string"
+    },
+    "snpQemu": {
+      "additionalProperties": false,
+      "properties": {
+        "cpu": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "devices": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "machine": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "netdevs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "objects": {
+          "$ref": "#/$defs/stringArray"
+        }
+      },
+      "required": [
+        "machine",
+        "cpu",
+        "objects",
+        "netdevs",
+        "devices"
+      ],
+      "type": "object"
+    },
+    "snpRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration": {
+          "additionalProperties": false,
+          "properties": {
+            "cmdline": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cpus": {
+              "maximum": 255,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "disk": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "firmware": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "guest_features": {
+              "pattern": "^0x[0-9a-f]+$",
+              "type": "string"
+            },
+            "initrd": {
+              "type": "null"
+            },
+            "kernel": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "memory": {
+              "$ref": "#/$defs/memory"
+            },
+            "mode": {
+              "const": "direct"
+            },
+            "qemu": {
+              "$ref": "#/$defs/snpQemu"
+            },
+            "vcpu_type": {
+              "$ref": "#/$defs/vcpuType"
+            },
+            "vmm_type": {
+              "const": "QEMU"
+            }
+          },
+          "required": [
+            "cpus",
+            "memory",
+            "vcpu_type",
+            "vmm_type",
+            "guest_features",
+            "mode",
+            "firmware",
+            "kernel",
+            "initrd",
+            "cmdline",
+            "disk",
+            "qemu"
+          ],
+          "type": "object"
+        },
+        "measurement": {
+          "$ref": "#/$defs/sha384"
+        }
+      },
+      "required": [
+        "configuration",
+        "measurement"
+      ],
+      "type": "object"
+    },
+    "stringArray": {
+      "items": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "tdxQemu": {
+      "additionalProperties": false,
+      "properties": {
+        "accel": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "cpu": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "devices": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "machine": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "netdevs": {
+          "$ref": "#/$defs/stringArray"
+        },
+        "objects": {
+          "$ref": "#/$defs/stringArray"
+        }
+      },
+      "required": [
+        "machine",
+        "cpu",
+        "accel",
+        "objects",
+        "netdevs",
+        "devices"
+      ],
+      "type": "object"
+    },
+    "tdxRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "configuration": {
+          "additionalProperties": false,
+          "properties": {
+            "acpi_distribution": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cmdline": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "cpus": {
+              "maximum": 255,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "disk": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "firmware": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "initrd": {
+              "type": "null"
+            },
+            "kernel": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "measurement_note": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "memory": {
+              "$ref": "#/$defs/memory"
+            },
+            "mode": {
+              "const": "direct"
+            },
+            "qemu": {
+              "$ref": "#/$defs/tdxQemu"
+            },
+            "qemu_source_version": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "cpus",
+            "memory",
+            "acpi_distribution",
+            "qemu_source_version",
+            "mode",
+            "firmware",
+            "kernel",
+            "initrd",
+            "cmdline",
+            "disk",
+            "qemu",
+            "measurement_note"
+          ],
+          "type": "object"
+        },
+        "measurement": {
+          "additionalProperties": false,
+          "properties": {
+            "mr_td": {
+              "$ref": "#/$defs/sha384"
+            },
+            "rtmr_0": {
+              "$ref": "#/$defs/sha384"
+            },
+            "rtmr_1": {
+              "$ref": "#/$defs/sha384"
+            },
+            "rtmr_2": {
+              "$ref": "#/$defs/sha384"
+            }
+          },
+          "required": [
+            "mr_td",
+            "rtmr_0",
+            "rtmr_1",
+            "rtmr_2"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "configuration",
+        "measurement"
+      ],
+      "type": "object"
+    },
+    "vcpuType": {
+      "enum": [
+        "EPYC",
+        "EPYC-Genoa",
+        "EPYC-Genoa-v1",
+        "EPYC-IBPB",
+        "EPYC-Milan",
+        "EPYC-Milan-v1",
+        "EPYC-Milan-v2",
+        "EPYC-Rome",
+        "EPYC-Rome-v1",
+        "EPYC-Rome-v2",
+        "EPYC-Rome-v3",
+        "EPYC-Turin",
+        "EPYC-v1",
+        "EPYC-v2",
+        "EPYC-v3",
+        "EPYC-v4"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "urn:confidential-containers:podvm:measurements",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifact": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "const": "application/zstd"
+        },
+        "name": {
+          "pattern": "^podvm-ubuntu-24\\.04-x86_64-.+\\.tar\\.zst$",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sha256",
+        "media_type"
+      ],
+      "type": "object"
+    },
+    "inputs": {
+      "type": "object"
+    },
+    "profiles": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "sev": {
+            "$ref": "#/$defs/sevModels"
+          },
+          "tdx": {
+            "$ref": "#/$defs/tdxRecord"
+          }
+        },
+        "required": [
+          "tdx",
+          "sev"
+        ],
+        "type": "object"
+      },
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/profileId"
+      },
+      "type": "object"
+    },
+    "release": {
+      "additionalProperties": false,
+      "properties": {
+        "source_repository": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "source_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "source_repository",
+        "source_revision"
+      ],
+      "type": "object"
+    },
+    "schema": {
+      "format": "uri",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema",
+    "release",
+    "artifact",
+    "inputs",
+    "profiles"
+  ],
+  "title": "CoCo PodVM measurements",
+  "type": "object"
+}

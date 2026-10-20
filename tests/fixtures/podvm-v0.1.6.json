@@ -1,0 +1,403 @@
+{
+  "artifact": {
+    "media_type": "application/zstd",
+    "name": "podvm-ubuntu-24.04-x86_64-v0.1.6.tar.zst",
+    "sha256": "9d6c3b6de2c9251a1bd24b57d53acc6f723e7c8210114802085e1ad2a4f4d5ab"
+  },
+  "inputs": {
+    "build_inputs": {
+      "agent_debian_snapshot": "20250115T000000Z",
+      "agent_rust_container": "rust@sha256:4c2fd73ef19c5ef9d54bee03b06b2839a392604fbfcd578ed948b71b37c1d7fb",
+      "go": "1.25.12",
+      "go_sha256": "234828b7a89e0e303d2556310ee549fbcf253d28de937bac3da13d6294262ac1",
+      "mkosi": "v26",
+      "oras": "1.2.0",
+      "protoc": "3.16.0",
+      "rust_container": "rust@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f",
+      "ubuntu_container": "ubuntu@sha256:0d39fcc8335d6d74d5502f6df2d30119ff4790ebbb60b364818d5112d9e3e932"
+    },
+    "local_assets": {
+      "assets/agent-model-mounts.rs": "5d3c4e491b839c596d13c64663e95d737b039e1c267a79cb3c257cd8582131b4",
+      "assets/attestation-agent-dispatcher": "c83ac81138069cac7d53ffe311490f5908c42e42ee15435d968ba6c08c7ad9be",
+      "assets/build-model-components.sh": "6099eb1246ddeb6dabdb77c963af6efe4aefa9e42869d0acc61f952b621a88a2",
+      "assets/guest/etc/agent-config.toml": "01ce63c81ecf800e451337dc09cbd07439fc0f613c79ca79b3615f2f7ae6240d",
+      "assets/guest/etc/systemd/system/api-server-rest.service": "dd449c8962edc48f8779bb0a74887d63162f73da1e44b4f2513791d368ca4d69",
+      "assets/guest/etc/systemd/system/attestation-agent.service": "41cde351522bf0a4227d0700932a04220ba7cad26db802565eac5a54cb4f231b",
+      "assets/guest/etc/systemd/system/confidential-data-hub.service": "ae5fa480ef24ac220ee1ccdbba1a90312505b8ece2ce0578017bcb723bff6670",
+      "assets/guest/etc/systemd/system/tmp.mount": "47e427ebd7b3813b8daec92ffc08c58aef232d26c1804004930f5e7d8becb9c3",
+      "assets/guest/etc/systemd/system/var.mount": "0306b0a5a1f5c9de5b36c9e4824af236b8d54e812bd71461c098632fe1e5023c",
+      "assets/image-builder-loop.sh": "14c44633a801820c12ed4a8d712f14fe87bb6352cfe884c8a531b652fdec6709",
+      "assets/image-builder.Dockerfile": "910feed4e0a84f7db5ac6adfe34c90d9724d612681e7ae39844609773ced097a",
+      "assets/model-block-policy.example.json": "9a9a8277d7ed58426f770cfaac5a6c1ec51a017414086dfbfafd1da050440403",
+      "assets/model-builder.Dockerfile": "62f760545e0a1bcc63bc993322f4175d4bb79b3bd6bf60b1a82ee4b7c1c9f37d",
+      "assets/model-lifecycle-smoke.sh": "1f750f2a52d56818fd3ee1a81ab262ad1891cd54cb301bb4093001afe2e1c860",
+      "assets/model-mount/go.mod": "4e50a616df14484840a00388f01f3cddef47ab65bc8fa2415e42bc71e737d2b3",
+      "assets/model-mount/go.sum": "567290fb06ca2d519e30ddc1282fb9ca6541fb4cd9a095dd3df51245adbf84a3",
+      "assets/model-mount/main.go": "d145047d83812497c242b486b8559ec9cf5f236d423853a34132e73a9c57eba1",
+      "assets/model-mount/main_test.go": "5d203f3d8c6ade32245ff734c6fa1849e9f6ea07b7772eb2aaf0c8e89d7e5dae",
+      "assets/model-mounts.example.toml": "8f27fbe5024dd0f0965d274459f80065fd32a9e36d6f862e0b8ac75e83960112",
+      "assets/model-smoke.go": "fc63d5985ae1d6df98849d033b5ddfac4bd5301168d42aa4a34c71af01d2e66a",
+      "assets/patches/kata-image-builder-errors.patch": "2438758c94abaa05e0dee593f409719f06ee492cde05e47caa6f65f8f1ff170b",
+      "assets/patches/kata-model-mounts.patch": "13bfbcb0481e19eed50a313fd6a23b2136b800eed3980dc52dfdaa967bce6d99",
+      "assets/patches/tdx-measure-no-initrd.patch": "a55fc7f08f187add7b8c28a6143c9963e9a3f715eec320d01e9d14e9b4bb3b5e",
+      "assets/smoke-blocks.py": "0d8a32854e836388c918fab1d2ec6723a2a52faa2218568c7038d548a7fe89de",
+      "assets/smoke-entrypoint.sh": "ec44be213fcd9aebe7e869b081db548987bc86e7ca7aabb776376fe5e293f133",
+      "assets/smoke.Dockerfile": "a825eb648d1820dc7aada69a8ccfb0d46b8b4066c2c37b6dddd757860307487d"
+    },
+    "measurement_fingerprint": "ce515fa14d0f7eed53199a11fd8566cd6608c844ba38d0fb3a3800888de895ac",
+    "measurement_tools": {
+      "sev_snp_measure": {
+        "artifact": {
+          "sha256": "feda1aebe69dcbf38e9c636ed1d082bb7dc741fc6969f197d39faddb72b2762d",
+          "url": "https://files.pythonhosted.org/packages/12/96/5b673738d1f973700369d9e80c1c32937d230acef721141e532891441213/sev_snp_measure-0.0.13-py3-none-any.whl"
+        },
+        "repository": "https://github.com/virtee/sev-snp-measure.git",
+        "revision": "5b6a79e86641a7ca1a377ba1848d1dcdc2498494",
+        "tag": "v0.0.13"
+      },
+      "tdx_measure": {
+        "builder": "rust@sha256:365468470075493dc4583f47387001854321c5a8583ea9604b297e67f01c5a4f",
+        "patch_sha256": "a55fc7f08f187add7b8c28a6143c9963e9a3f715eec320d01e9d14e9b4bb3b5e",
+        "qemu_source": {
+          "repository": "https://github.com/qemu/qemu.git",
+          "revision": "6e9a825c1d4e7b62d072e99a89ecd1a74c7f0d55",
+          "tag": "v11.0.1"
+        },
+        "source": {
+          "artifact": {
+            "sha256": "9037831a10e6eb8ce94be363e4b64a8132c2335690cc8f486abbf49a462d92cc",
+            "url": "https://github.com/virtee/tdx-measure/releases/download/v0.1.1/tdx-measure"
+          },
+          "repository": "https://github.com/virtee/tdx-measure.git",
+          "revision": "3d9e1244d87e8958f40bfdd649e059df54b40789",
+          "tag": "v0.1.1"
+        }
+      }
+    },
+    "oci": {
+      "api_server_rest": {
+        "digest": "sha256:919a608b517c2850dabac61b9a10bbbc19d7be7ff2045e95f9b6c32fb33fa820",
+        "repository": "ghcr.io/confidential-containers/guest-components/api-server-rest",
+        "source_repository": "confidential-containers/guest-components",
+        "source_revision": "dcd55ea16ea4f4bcb87c1420f16af92e9eb15f2f",
+        "tag": "dcd55ea16ea4f4bcb87c1420f16af92e9eb15f2f-x86_64"
+      },
+      "attestation_agent_snp": {
+        "digest": "sha256:870e35f29f1b4abe67b0a4df461fc78abc2b6681be5121e17a5c11c03d94793b",
+        "repository": "ghcr.io/confidential-containers/guest-components/attestation-agent",
+        "source_repository": "confidential-containers/guest-components",
+        "source_revision": "dcd55ea16ea4f4bcb87c1420f16af92e9eb15f2f",
+        "tag": "dcd55ea16ea4f4bcb87c1420f16af92e9eb15f2f-amd_x86_64"
+      },
+      "attestation_agent_tdx": {
+        "digest": "sha256:c6924261d9af7fa1c3f124dc9aca43a69507c4fca0c7b47e2573f1c0ec0213af",
+        "repository": "ghcr.io/confidential-containers/guest-components/attestation-agent",
+        "source_repository": "confidential-containers/guest-components",
+        "source_revision": "dcd55ea16ea4f4bcb87c1420f16af92e9eb15f2f",
+        "tag": "dcd55ea16ea4f4bcb87c1420f16af92e9eb15f2f-tdx_x86_64"
+      },
+      "confidential_data_hub": {
+        "digest": "sha256:1f2fee87cea32cd9072139c1bb33bc3cb7fc898ccac415859bbb21ce85038329",
+        "repository": "ghcr.io/confidential-containers/guest-components/confidential-data-hub",
+        "source_repository": "confidential-containers/guest-components",
+        "source_revision": "dcd55ea16ea4f4bcb87c1420f16af92e9eb15f2f",
+        "tag": "dcd55ea16ea4f4bcb87c1420f16af92e9eb15f2f-x86_64"
+      },
+      "kata_agent": {
+        "digest": "sha256:91e253c72d9cbfa338a3e8a65af9a89fd1e3fbc7f3dab97e866690b049d1c845",
+        "repository": "ghcr.io/kata-containers/cached-artefacts/agent",
+        "source_repository": "kata-containers/kata-containers",
+        "source_revision": "cf82bb35c80320178bf7570252fe75d6fb263209",
+        "tag": "cf82bb35c80320178bf7570252fe75d6fb263209-x86_64"
+      },
+      "kernel": {
+        "digest": "sha256:9ecd8c0f8795e614757fac1824e10ac12d446ef36f81df0906f263b874d12b05",
+        "repository": "ghcr.io/kata-containers/cached-artefacts/kernel",
+        "source_repository": "kata-containers/kata-containers",
+        "source_revision": "cf82bb35c80320178bf7570252fe75d6fb263209",
+        "tag": "cf82bb35c80320178bf7570252fe75d6fb263209-x86_64"
+      },
+      "ovmf_snp": {
+        "digest": "sha256:c20b9b41b58a3586473f614d34b249a479b91314f9e5a3d11ed8977868abff87",
+        "repository": "ghcr.io/kata-containers/cached-artefacts/ovmf-sev",
+        "source_repository": "kata-containers/kata-containers",
+        "source_revision": "cf82bb35c80320178bf7570252fe75d6fb263209",
+        "tag": "cf82bb35c80320178bf7570252fe75d6fb263209-x86_64"
+      },
+      "ovmf_tdx": {
+        "digest": "sha256:96ef10410ebecf5af7b1d61cb65b8cb31c6ff1c893e6569e1b8a47ad8e41b0df",
+        "repository": "ghcr.io/kata-containers/cached-artefacts/ovmf-tdx",
+        "source_repository": "kata-containers/kata-containers",
+        "source_revision": "cf82bb35c80320178bf7570252fe75d6fb263209",
+        "tag": "cf82bb35c80320178bf7570252fe75d6fb263209-x86_64"
+      },
+      "pause": {
+        "digest": "sha256:7031c1b283388d2c2e09b57badb803c05ebed362dc88d84b480cc47f72a21097",
+        "repository": "registry.k8s.io/pause",
+        "tag": "3.9"
+      },
+      "qemu": {
+        "digest": "sha256:043601ed297245ea258cdca191a67f6286da0366e26501f5d28842ff66d32661",
+        "repository": "ghcr.io/kata-containers/cached-artefacts/qemu",
+        "source_repository": "kata-containers/kata-containers",
+        "source_revision": "cf82bb35c80320178bf7570252fe75d6fb263209",
+        "tag": "cf82bb35c80320178bf7570252fe75d6fb263209-x86_64"
+      },
+      "runtime": {
+        "digest": "sha256:f1b555236eae6e05a97476c4853ef9c26d1053947327b160e558dc0dc86c2f8d",
+        "provenance": "digest-only-smoke",
+        "repository": "ghcr.io/kata-containers/cached-artefacts/shim-v2-go",
+        "source_repository": "kata-containers/kata-containers",
+        "source_revision": "cf82bb35c80320178bf7570252fe75d6fb263209",
+        "tag": "cf82bb35c80320178bf7570252fe75d6fb263209-x86_64"
+      }
+    },
+    "platform": {
+      "architecture": "x86_64",
+      "distribution": "ubuntu",
+      "release": "24.04",
+      "snapshot": "20250115T000000Z"
+    },
+    "sources": {
+      "cloud_api_adaptor": {
+        "repository": "https://github.com/confidential-containers/cloud-api-adaptor.git",
+        "revision": "38d0fcf7c7b787cc7fb9831410a910b37bb3be09",
+        "tag": "v0.22.0"
+      },
+      "guest_components": {
+        "repository": "https://github.com/confidential-containers/guest-components.git",
+        "revision": "dcd55ea16ea4f4bcb87c1420f16af92e9eb15f2f"
+      },
+      "kata_containers": {
+        "repository": "https://github.com/kata-containers/kata-containers.git",
+        "revision": "cf82bb35c80320178bf7570252fe75d6fb263209",
+        "tag": "4.0.0"
+      },
+      "mkosi": {
+        "repository": "https://github.com/systemd/mkosi.git",
+        "revision": "84af20892b61c8e177e391f997ded8b4cb5514f2",
+        "tag": "v26"
+      },
+      "modelwrap": {
+        "repository": "https://github.com/tinfoilsh/modelwrap.git",
+        "revision": "e558401ffbae46f61844f72c882d049debaa7a53",
+        "tag": "v0.2.1"
+      },
+      "qemu": {
+        "repository": "https://github.com/qemu/qemu.git",
+        "revision": "6e9a825c1d4e7b62d072e99a89ecd1a74c7f0d55",
+        "tag": "v11.0.1"
+      },
+      "sev_snp_measure": {
+        "artifact": {
+          "sha256": "feda1aebe69dcbf38e9c636ed1d082bb7dc741fc6969f197d39faddb72b2762d",
+          "url": "https://files.pythonhosted.org/packages/12/96/5b673738d1f973700369d9e80c1c32937d230acef721141e532891441213/sev_snp_measure-0.0.13-py3-none-any.whl"
+        },
+        "repository": "https://github.com/virtee/sev-snp-measure.git",
+        "revision": "5b6a79e86641a7ca1a377ba1848d1dcdc2498494",
+        "tag": "v0.0.13"
+      },
+      "tdx_measure": {
+        "artifact": {
+          "sha256": "9037831a10e6eb8ce94be363e4b64a8132c2335690cc8f486abbf49a462d92cc",
+          "url": "https://github.com/virtee/tdx-measure/releases/download/v0.1.1/tdx-measure"
+        },
+        "repository": "https://github.com/virtee/tdx-measure.git",
+        "revision": "3d9e1244d87e8958f40bfdd649e059df54b40789",
+        "tag": "v0.1.1"
+      }
+    }
+  },
+  "profiles": {
+    "2vcpu-8g": {
+      "sev": {
+        "EPYC-Genoa-v1": {
+          "configuration": {
+            "cmdline": "tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k cryptomgr.notests net.ifnames=0 pci=lastbus=0 dm-mod.create=\"dm-verity,,,ro,0 776192 verity 1 /dev/vda1 /dev/vda2 4096 4096 97024 0 sha256 c6a750d0265d8abf3f22e4a9edfa802d5d9b8dfa037148447c383f59f43be32f a3418fdf64d7b03668dc79e6e070d96d4a8d8afd44291a6eadb0e069018c182c\" root=/dev/dm-0 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 console=hvc0 console=hvc1 quiet systemd.show_status=false panic=1 selinux=0 systemd.unit=kata-containers.target systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket scsi_mod.scan=none agent.launch_process_timeout=6 cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1",
+            "cpus": 2,
+            "disk": "podvm.raw",
+            "firmware": "firmware/AMDSEV.fd",
+            "guest_features": "0x1",
+            "initrd": null,
+            "kernel": "vmlinuz",
+            "memory": "8G",
+            "mode": "direct",
+            "qemu": {
+              "cpu": "EPYC-Genoa-v1",
+              "devices": [
+                "virtio-serial-pci,id=serial0,disable-modern=false,max_ports=2",
+                "virtconsole,chardev=charconsole0",
+                "virtio-blk-pci,drive=root,disable-modern=false",
+                "virtio-scsi-pci,id=scsi0,disable-modern=false",
+                "virtio-net-pci,netdev=network0,disable-modern=false",
+                "vhost-vsock-pci,guest-cid=3,disable-modern=false"
+              ],
+              "machine": "q35,vmport=off,confidential-guest-support=sev0,memory-backend=ram1",
+              "netdevs": [
+                "user,id=network0"
+              ],
+              "objects": [
+                "memory-backend-memfd,id=ram1,size=8G,share=true,prealloc=false",
+                "sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on"
+              ]
+            },
+            "vcpu_type": "EPYC-Genoa-v1",
+            "vmm_type": "QEMU"
+          },
+          "measurement": "c1f54a3d5db829ce72f07cf9309b70b44f23b5e425c657faa4a48b74b922eaff76b9f19b359cc61c364d0d0c408f817e"
+        },
+        "EPYC-Milan-v2": {
+          "configuration": {
+            "cmdline": "tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k cryptomgr.notests net.ifnames=0 pci=lastbus=0 dm-mod.create=\"dm-verity,,,ro,0 776192 verity 1 /dev/vda1 /dev/vda2 4096 4096 97024 0 sha256 c6a750d0265d8abf3f22e4a9edfa802d5d9b8dfa037148447c383f59f43be32f a3418fdf64d7b03668dc79e6e070d96d4a8d8afd44291a6eadb0e069018c182c\" root=/dev/dm-0 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 console=hvc0 console=hvc1 quiet systemd.show_status=false panic=1 selinux=0 systemd.unit=kata-containers.target systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket scsi_mod.scan=none agent.launch_process_timeout=6 cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1",
+            "cpus": 2,
+            "disk": "podvm.raw",
+            "firmware": "firmware/AMDSEV.fd",
+            "guest_features": "0x1",
+            "initrd": null,
+            "kernel": "vmlinuz",
+            "memory": "8G",
+            "mode": "direct",
+            "qemu": {
+              "cpu": "EPYC-Milan-v2",
+              "devices": [
+                "virtio-serial-pci,id=serial0,disable-modern=false,max_ports=2",
+                "virtconsole,chardev=charconsole0",
+                "virtio-blk-pci,drive=root,disable-modern=false",
+                "virtio-scsi-pci,id=scsi0,disable-modern=false",
+                "virtio-net-pci,netdev=network0,disable-modern=false",
+                "vhost-vsock-pci,guest-cid=3,disable-modern=false"
+              ],
+              "machine": "q35,vmport=off,confidential-guest-support=sev0,memory-backend=ram1",
+              "netdevs": [
+                "user,id=network0"
+              ],
+              "objects": [
+                "memory-backend-memfd,id=ram1,size=8G,share=true,prealloc=false",
+                "sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on"
+              ]
+            },
+            "vcpu_type": "EPYC-Milan-v2",
+            "vmm_type": "QEMU"
+          },
+          "measurement": "8e1d44cad789c4aa79c2aaa915d2cf17e3cfdb0d20f5efb9dc90b30e645bee943ddd578fc4d993e48ed35872566bac3c"
+        },
+        "EPYC-Turin": {
+          "configuration": {
+            "cmdline": "tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k cryptomgr.notests net.ifnames=0 pci=lastbus=0 dm-mod.create=\"dm-verity,,,ro,0 776192 verity 1 /dev/vda1 /dev/vda2 4096 4096 97024 0 sha256 c6a750d0265d8abf3f22e4a9edfa802d5d9b8dfa037148447c383f59f43be32f a3418fdf64d7b03668dc79e6e070d96d4a8d8afd44291a6eadb0e069018c182c\" root=/dev/dm-0 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 console=hvc0 console=hvc1 quiet systemd.show_status=false panic=1 selinux=0 systemd.unit=kata-containers.target systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket scsi_mod.scan=none agent.launch_process_timeout=6 cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1",
+            "cpus": 2,
+            "disk": "podvm.raw",
+            "firmware": "firmware/AMDSEV.fd",
+            "guest_features": "0x1",
+            "initrd": null,
+            "kernel": "vmlinuz",
+            "memory": "8G",
+            "mode": "direct",
+            "qemu": {
+              "cpu": "EPYC-Turin",
+              "devices": [
+                "virtio-serial-pci,id=serial0,disable-modern=false,max_ports=2",
+                "virtconsole,chardev=charconsole0",
+                "virtio-blk-pci,drive=root,disable-modern=false",
+                "virtio-scsi-pci,id=scsi0,disable-modern=false",
+                "virtio-net-pci,netdev=network0,disable-modern=false",
+                "vhost-vsock-pci,guest-cid=3,disable-modern=false"
+              ],
+              "machine": "q35,vmport=off,confidential-guest-support=sev0,memory-backend=ram1",
+              "netdevs": [
+                "user,id=network0"
+              ],
+              "objects": [
+                "memory-backend-memfd,id=ram1,size=8G,share=true,prealloc=false",
+                "sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on"
+              ]
+            },
+            "vcpu_type": "EPYC-Turin",
+            "vmm_type": "QEMU"
+          },
+          "measurement": "c2605f74bb9ef2370ad9209dfe85b584bdcb46feb8d8b582eb5339943e2add2306b45841d495949615976da7f0ef2796"
+        },
+        "EPYC-v4": {
+          "configuration": {
+            "cmdline": "tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k cryptomgr.notests net.ifnames=0 pci=lastbus=0 dm-mod.create=\"dm-verity,,,ro,0 776192 verity 1 /dev/vda1 /dev/vda2 4096 4096 97024 0 sha256 c6a750d0265d8abf3f22e4a9edfa802d5d9b8dfa037148447c383f59f43be32f a3418fdf64d7b03668dc79e6e070d96d4a8d8afd44291a6eadb0e069018c182c\" root=/dev/dm-0 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 console=hvc0 console=hvc1 quiet systemd.show_status=false panic=1 selinux=0 systemd.unit=kata-containers.target systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket scsi_mod.scan=none agent.launch_process_timeout=6 cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1",
+            "cpus": 2,
+            "disk": "podvm.raw",
+            "firmware": "firmware/AMDSEV.fd",
+            "guest_features": "0x1",
+            "initrd": null,
+            "kernel": "vmlinuz",
+            "memory": "8G",
+            "mode": "direct",
+            "qemu": {
+              "cpu": "EPYC-v4",
+              "devices": [
+                "virtio-serial-pci,id=serial0,disable-modern=false,max_ports=2",
+                "virtconsole,chardev=charconsole0",
+                "virtio-blk-pci,drive=root,disable-modern=false",
+                "virtio-scsi-pci,id=scsi0,disable-modern=false",
+                "virtio-net-pci,netdev=network0,disable-modern=false",
+                "vhost-vsock-pci,guest-cid=3,disable-modern=false"
+              ],
+              "machine": "q35,vmport=off,confidential-guest-support=sev0,memory-backend=ram1",
+              "netdevs": [
+                "user,id=network0"
+              ],
+              "objects": [
+                "memory-backend-memfd,id=ram1,size=8G,share=true,prealloc=false",
+                "sev-snp-guest,id=sev0,cbitpos=51,reduced-phys-bits=1,kernel-hashes=on"
+              ]
+            },
+            "vcpu_type": "EPYC-v4",
+            "vmm_type": "QEMU"
+          },
+          "measurement": "fdb547723fa20499e46a1bef2c8e8e58a5318c6e2336b08f2ea37d5d6f98083f1c463dfdb2124a3a12d6c76f58298670"
+        }
+      },
+      "tdx": {
+        "configuration": {
+          "acpi_distribution": "ubuntu:26.04",
+          "cmdline": "tsc=reliable no_timer_check rcupdate.rcu_expedited=1 i8042.direct=1 i8042.dumbkbd=1 i8042.nopnp=1 i8042.noaux=1 noreplace-smp reboot=k cryptomgr.notests net.ifnames=0 pci=lastbus=0 dm-mod.create=\"dm-verity,,,ro,0 776192 verity 1 /dev/vda1 /dev/vda2 4096 4096 97024 0 sha256 c6a750d0265d8abf3f22e4a9edfa802d5d9b8dfa037148447c383f59f43be32f a3418fdf64d7b03668dc79e6e070d96d4a8d8afd44291a6eadb0e069018c182c\" root=/dev/dm-0 rootflags=data=ordered,errors=remount-ro ro rootfstype=ext4 console=hvc0 console=hvc1 quiet systemd.show_status=false panic=1 selinux=0 systemd.unit=kata-containers.target systemd.mask=systemd-networkd.service systemd.mask=systemd-networkd.socket scsi_mod.scan=none agent.launch_process_timeout=6 cgroup_no_v1=all systemd.unified_cgroup_hierarchy=1",
+          "cpus": 2,
+          "disk": "podvm.raw",
+          "firmware": "firmware/OVMF.inteltdx.fd",
+          "initrd": null,
+          "kernel": "vmlinuz",
+          "measurement_note": "ACPI generation uses a null block backend for the root disk and a null console backend, preserving their device topology. The ACPI dumper omits the tdx-guest object and confidential-guest-support property so it can run on a non-TDX KVM host. It also substitutes a hubport network backend because the measurement tool's minimal QEMU build omits libslirp, and disables the virtio-net option ROM because that build omits pc-bios. The runtime still uses user networking and its normal option ROM. These substitutions leave the measured device topology unchanged.",
+          "memory": "8G",
+          "mode": "direct",
+          "qemu": {
+            "accel": "kvm",
+            "cpu": "host,pmu=off",
+            "devices": [
+              "virtio-serial-pci,id=serial0,disable-modern=false,max_ports=2",
+              "virtconsole,chardev=charconsole0",
+              "virtio-blk-pci,drive=root,disable-modern=false",
+              "virtio-scsi-pci,id=scsi0,disable-modern=false",
+              "virtio-net-pci,netdev=network0,disable-modern=false",
+              "vhost-vsock-pci,guest-cid=3,disable-modern=false"
+            ],
+            "machine": "q35,kernel-irqchip=split,hpet=off,smm=off,pic=off,confidential-guest-support=tdx",
+            "netdevs": [
+              "user,id=network0"
+            ],
+            "objects": [
+              "tdx-guest,id=tdx"
+            ]
+          },
+          "qemu_source_version": "11.0.1"
+        },
+        "measurement": {
+          "mr_td": "c78e2b8b2f66207f3807d8d999f51e04f5eab8f7aa02614a86ddd81b61f4e79c5d7616664fcb190b8eaae2e26d60b12a",
+          "rtmr_0": "a4c6ee302edef09949b1cc88421ef55e92fb97367db97b0fb0671c5cc600c0055a6bee57729e4ccfea2deb93357486f1",
+          "rtmr_1": "0afaec72ca60abd65a7fb8a4817b07b014b29bd1a33887792efb509c417e205624291c77074659a5a569898c363e9c8f",
+          "rtmr_2": "30e5c26873d941d60a544b902755afaa38a13c3a82e2ddf6a45cb3d75228a16f0df01cde4816e5816384d1288c062d3c"
+        }
+      }
+    }
+  },
+  "release": {
+    "source_repository": "prem-research/podvm",
+    "source_revision": "b57d5e92583388169743bc0084673f0249d64a34",
+    "version": "v0.1.6"
+  },
+  "schema": "https://raw.githubusercontent.com/prem-research/podvm/b57d5e92583388169743bc0084673f0249d64a34/schemas/measurements.schema.json"
+}

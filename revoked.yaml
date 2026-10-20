@@ -1,0 +1,5 @@
+# Cumulative list of Init-Data definitions that relying parties must reject even if an
+# earlier release referenced them. Entries are never removed; each `sha256` is the
+# SHA-256 of the exact TOML bytes (the init-data/<sha256>.toml filename).
+schema_version: 1
+entries: []

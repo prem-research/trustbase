@@ -1,0 +1,260 @@
+{
+  "$defs": {
+    "repository": {
+      "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$",
+      "type": "string"
+    },
+    "requestName": {
+      "pattern": "^[A-Z][A-Za-z0-9]*$",
+      "type": "string"
+    },
+    "sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "defaults": {
+      "additionalProperties": {
+        "type": "boolean"
+      },
+      "minProperties": 1,
+      "propertyNames": {
+        "$ref": "#/$defs/requestName"
+      },
+      "type": "object"
+    },
+    "evaluator": {
+      "additionalProperties": false,
+      "properties": {
+        "kata_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        },
+        "regorus_revision": {
+          "pattern": "^[0-9a-f]{40}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kata_revision",
+        "regorus_revision"
+      ],
+      "type": "object"
+    },
+    "floor": {
+      "additionalProperties": false,
+      "properties": {
+        "device_binds": {
+          "items": {
+            "pattern": "^/dev/[A-Za-z0-9_./-]+$",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "image_repositories": {
+          "items": {
+            "$ref": "#/$defs/repository"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "max_gpu_devices": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "namespaces": {
+          "items": {
+            "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "pause_image": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "podvm_selections": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "profile": {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+                "type": "string"
+              },
+              "version": {
+                "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+                "type": "string"
+              }
+            },
+            "required": ["profile", "version"],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "privileged_containers": {
+          "additionalProperties": {
+            "$ref": "#/$defs/repository"
+          },
+          "propertyNames": {
+            "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "namespaces",
+        "pause_image",
+        "podvm_selections",
+        "image_repositories",
+        "privileged_containers",
+        "device_binds",
+        "max_gpu_devices"
+      ],
+      "type": "object"
+    },
+    "policy": {
+      "enum": [
+        "genpolicy",
+        "deny-all"
+      ]
+    },
+    "policy_data": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_env_regex": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "common": {
+          "additionalProperties": false,
+          "properties": {
+            "cpath": {
+              "type": "string"
+            },
+            "root_path": {
+              "type": "string"
+            },
+            "sfprefix": {
+              "type": "string"
+            },
+            "spath": {
+              "pattern": "^/[A-Za-z0-9_./-]+$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cpath",
+            "root_path",
+            "sfprefix",
+            "spath"
+          ],
+          "type": "object"
+        },
+        "copy_file": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "default_caps": {
+          "items": {
+            "pattern": "^CAP_[A-Z_]+$",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "privileged_caps": {
+          "items": {
+            "pattern": "^CAP_[A-Z_]+$",
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "sandbox_storages": {
+          "items": {
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "vfio_device_path": {
+          "pattern": "^/dev/[A-Za-z0-9_./-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "copy_file",
+        "allow_env_regex",
+        "default_caps",
+        "privileged_caps",
+        "common",
+        "vfio_device_path",
+        "sandbox_storages"
+      ],
+      "type": "object"
+    },
+    "rules": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted_sha256": {
+          "items": {
+            "$ref": "#/$defs/sha256"
+          },
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "accepted_sha256"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "source": {
+      "additionalProperties": false,
+      "properties": {
+        "branch": {
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "type": "string"
+        },
+        "path_prefix": {
+          "pattern": "^([A-Za-z0-9_.-]+/)+$",
+          "type": "string"
+        },
+        "repository": {
+          "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "branch",
+        "path_prefix"
+      ],
+      "type": "object"
+    }
+  },
+  "required": [
+    "schema_version",
+    "evaluator",
+    "source",
+    "policy",
+    "defaults"
+  ],
+  "title": "Trustbase admission rules",
+  "type": "object"
+}

@@ -1,0 +1,155 @@
+name: Admit Init-Data candidate
+
+# Fleet merges send `repository_dispatch` events of type `init-data-candidate` naming a candidate
+# TOML committed on fleet main. This workflow always runs the code on Trustbase's default branch,
+# fetches the exact candidate, runs the admission gate, and packages the would-be release. When
+# every check passes, a separate job applies the validated change and pushes the import commit
+# plus the next vX.Y.Z tag through the release bot App; a failed check publishes nothing.
+
+on:
+  repository_dispatch:
+    types: [init-data-candidate]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trustbase-admission
+  queue: max
+  cancel-in-progress: false
+
+env:
+  PYTHONUNBUFFERED: "1"
+
+jobs:
+  prepare:
+    name: Fetch and validate the candidate
+    runs-on:
+      group: arc-runners
+    timeout-minutes: 40
+    outputs:
+      changed: ${{ steps.receive.outputs.changed }}
+    steps:
+      - name: Install checkout dependencies
+        run: |
+          elevate=()
+          if (( EUID != 0 )); then elevate=(sudo -n); fi
+          "${elevate[@]}" apt-get update
+          "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl gcc git libc6-dev make tar
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python and GitHub CLI dependencies
+        run: |
+          python -m pip install -r requirements.txt
+          bash .github/scripts/install-gh.sh
+      - name: Validate authoring inputs and run offline tests
+        run: make validate test
+      - name: Install the admission evaluator's Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+        with:
+          toolchain: "1.95"
+      - name: Cache the admission evaluator build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            tools/kata-policy-eval/target
+          key: kata-policy-eval-${{ runner.os }}-${{ hashFiles('tools/kata-policy-eval/Cargo.lock', 'tools/kata-policy-eval/rust-toolchain.toml', 'tools/kata-policy-eval/src/**') }}
+      - name: Build the admission evaluator
+        run: make evaluator
+      - name: Mint a read-only token for the fleet repository
+        id: fleet
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.TRUSTBASE_READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TRUSTBASE_READER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: coco-fleet
+          permission-contents: read
+      - name: Receive the candidate and run the admission gate
+        id: receive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FLEET_TOKEN: ${{ steps.fleet.outputs.token }}
+          KATA_POLICY_EVAL: tools/kata-policy-eval/target/release/kata-policy-eval
+        run: python .github/scripts/receive.py
+      - name: Upload the admission report and candidate release
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trustbase-admission-report
+          path: |
+            build/admission/
+            !build/admission/inputs/
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Hand the validated change to the publish job
+        if: steps.receive.outputs.changed == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: trustbase-prepared-change
+          path: |
+            build/admission/prepared.json
+            build/admission/changes.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish the validated candidate
+    if: >-
+      needs.prepare.outputs.changed == 'true' &&
+      github.actor == vars.TRUSTBASE_FLEET_DISPATCH_ACTOR
+    needs: prepare
+    runs-on:
+      group: arc-runners
+    timeout-minutes: 60
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Install checkout dependencies
+        run: |
+          elevate=()
+          if (( EUID != 0 )); then elevate=(sudo -n); fi
+          "${elevate[@]}" apt-get update
+          "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl git make tar
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: trustbase-prepared-change
+          path: build/admission
+      - name: Check and apply the validated change
+        run: python .github/scripts/receive.py apply-prepared
+      - name: Wait for the preceding tag release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/receive.py await-predecessor
+      - name: Mint the release bot token for this repository
+        id: release
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.TRUSTBASE_RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.TRUSTBASE_RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+      - name: Commit and tag the admitted candidate
+        env:
+          RELEASE_TOKEN: ${{ steps.release.outputs.token }}
+        run: python .github/scripts/receive.py publish-prepared

@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "profiles": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+            "type": "string"
+          },
+          "initdata": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "podvm": {
+            "additionalProperties": false,
+            "properties": {
+              "profile": {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+                "type": "string"
+              },
+              "version": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "profile",
+              "version"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "initdata",
+          "podvm"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1
+    }
+  },
+  "required": [
+    "schema_version",
+    "profiles"
+  ],
+  "title": "Trustbase workload manifest",
+  "type": "object"
+}

@@ -1,0 +1,247 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:confidential-containers:podvm:measurements",
+  "title": "CoCo PodVM measurements",
+  "type": "object",
+  "required": ["schema", "release", "artifacts", "inputs", "profiles"],
+  "properties": {
+    "schema": {"type": "string", "format": "uri"},
+    "release": {
+      "type": "object",
+      "required": ["version", "source_repository", "source_revision"],
+      "properties": {
+        "version": {"type": "string", "minLength": 1},
+        "source_repository": {"type": "string", "minLength": 1},
+        "source_revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      },
+      "additionalProperties": false
+    },
+    "artifacts": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {
+        "cpu": {"$ref": "#/$defs/artifact", "properties": {"name": {"pattern": "^podvm-ubuntu-"}}},
+        "nvidia": {"$ref": "#/$defs/artifact", "properties": {"name": {"pattern": "^podvm-nvidia-ubuntu-"}}}
+      },
+      "additionalProperties": false
+    },
+    "inputs": {
+      "type": "object",
+      "minProperties": 1,
+      "properties": {"cpu": {"$ref": "#/$defs/inputs"}, "nvidia": {"$ref": "#/$defs/inputs"}},
+      "additionalProperties": false
+    },
+    "profiles": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/profileId"},
+      "additionalProperties": {
+        "type": "object",
+        "required": ["sev"],
+        "properties": {"tdx": {"$ref": "#/$defs/tdxRecord"}, "sev": {"$ref": "#/$defs/sevModels"}, "gpu": {"$ref": "#/$defs/gpu"}},
+        "if": {"required": ["gpu"]},
+        "then": {"not": {"required": ["tdx"]}},
+        "else": {"required": ["tdx"]},
+        "additionalProperties": false
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"profiles": {"not": {"additionalProperties": {"required": ["gpu"]}}}}},
+      "then": {"properties": {"artifacts": {"required": ["cpu"]}, "inputs": {"required": ["cpu"]}}},
+      "else": {"properties": {"artifacts": {"not": {"required": ["cpu"]}}, "inputs": {"not": {"required": ["cpu"]}}}}
+    },
+    {
+      "if": {"properties": {"profiles": {"not": {"additionalProperties": {"not": {"required": ["gpu"]}}}}}},
+      "then": {"properties": {"artifacts": {"required": ["nvidia"]}, "inputs": {"required": ["nvidia"]}}},
+      "else": {"properties": {"artifacts": {"not": {"required": ["nvidia"]}}, "inputs": {"not": {"required": ["nvidia"]}}}}
+    }
+  ],
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["name", "sha256", "media_type"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^podvm-(nvidia-)?ubuntu-24\\.04-x86_64-[A-Za-z0-9._-]+\\.tar\\.zst$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "media_type": {"const": "application/zstd"}
+      },
+      "additionalProperties": false
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "inputs": {
+      "type": "object",
+      "required": ["platform", "build_inputs", "sources", "oci", "local_assets", "measurement_tools", "measurement_fingerprint", "launch_profiles_sha256"],
+      "properties": {
+        "platform": {"type": "object"},
+        "build_inputs": {"type": "object"},
+        "sources": {"type": "object"},
+        "oci": {"type": "object"},
+        "local_assets": {"type": "object"},
+        "measurement_tools": {"type": "object"},
+        "measurement_fingerprint": {"$ref": "#/$defs/sha256"},
+        "launch_profiles_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "profileId": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "memory": {"type": "string", "pattern": "^[1-9][0-9]*[MG]$"},
+    "gpu": {
+      "type": "object",
+      "required": ["family", "platform", "count", "nvswitch_count"],
+      "properties": {
+        "family": {"enum": ["H100", "H200", "B200", "B300"]},
+        "platform": {"enum": ["pcie", "pcie-nvlink", "hgx-hopper", "hgx-blackwell"]},
+        "count": {"enum": [1, 8]},
+        "nvswitch_count": {"enum": [0, 4]}
+      },
+      "additionalProperties": false
+    },
+    "stringArray": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "tdxQemu": {
+      "type": "object",
+      "required": ["machine", "cpu", "accel", "objects", "netdevs", "devices"],
+      "properties": {
+        "machine": {"type": "string", "minLength": 1},
+        "cpu": {"type": "string", "minLength": 1},
+        "accel": {"type": "string", "minLength": 1},
+        "objects": {"$ref": "#/$defs/stringArray"},
+        "netdevs": {"$ref": "#/$defs/stringArray"},
+        "devices": {"$ref": "#/$defs/stringArray"}
+      },
+      "additionalProperties": false
+    },
+    "snpQemu": {
+      "type": "object",
+      "required": ["machine", "cpu", "objects", "netdevs", "devices"],
+      "properties": {
+        "machine": {"type": "string", "minLength": 1},
+        "cpu": {"type": "string", "minLength": 1},
+        "objects": {"$ref": "#/$defs/stringArray"},
+        "netdevs": {"$ref": "#/$defs/stringArray"},
+        "devices": {"$ref": "#/$defs/stringArray"}
+      },
+      "additionalProperties": false
+    },
+    "sha384": {"type": "string", "pattern": "^[0-9a-f]{96}$"},
+    "vcpuType": {
+      "type": "string",
+      "enum": [
+        "EPYC",
+        "EPYC-Genoa",
+        "EPYC-Genoa-v1",
+        "EPYC-IBPB",
+        "EPYC-Milan",
+        "EPYC-Milan-v1",
+        "EPYC-Milan-v2",
+        "EPYC-Rome",
+        "EPYC-Rome-v1",
+        "EPYC-Rome-v2",
+        "EPYC-Rome-v3",
+        "EPYC-Turin",
+        "EPYC-v1",
+        "EPYC-v2",
+        "EPYC-v3",
+        "EPYC-v4"
+      ]
+    },
+    "tdxRecord": {
+      "type": "object",
+      "required": ["configuration", "measurement"],
+      "properties": {
+        "configuration": {
+          "type": "object",
+          "required": [
+            "cpus",
+            "memory",
+            "acpi_distribution",
+            "qemu_source_version",
+            "mode",
+            "firmware",
+            "kernel",
+            "initrd",
+            "cmdline",
+            "disk",
+            "qemu",
+            "measurement_note"
+          ],
+          "properties": {
+            "cpus": {"type": "integer", "minimum": 1, "maximum": 255},
+            "memory": {"$ref": "#/$defs/memory"},
+            "acpi_distribution": {"type": "string", "minLength": 1},
+            "qemu_source_version": {"type": "string", "minLength": 1},
+            "mode": {"const": "direct"},
+            "firmware": {"type": "string", "minLength": 1},
+            "kernel": {"type": "string", "minLength": 1},
+            "initrd": {"type": "null"},
+            "cmdline": {"type": "string", "minLength": 1},
+            "disk": {"type": "string", "minLength": 1},
+            "qemu": {"$ref": "#/$defs/tdxQemu"},
+            "measurement_note": {"type": "string", "minLength": 1}
+          },
+          "additionalProperties": false
+        },
+        "measurement": {
+          "type": "object",
+          "required": ["mr_td", "rtmr_0", "rtmr_1", "rtmr_2"],
+          "properties": {
+            "mr_td": {"$ref": "#/$defs/sha384"},
+            "rtmr_0": {"$ref": "#/$defs/sha384"},
+            "rtmr_1": {"$ref": "#/$defs/sha384"},
+            "rtmr_2": {"$ref": "#/$defs/sha384"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "snpRecord": {
+      "type": "object",
+      "required": ["configuration", "measurement"],
+      "properties": {
+        "configuration": {
+          "type": "object",
+          "required": [
+            "cpus",
+            "memory",
+            "vcpu_type",
+            "vmm_type",
+            "guest_features",
+            "mode",
+            "firmware",
+            "kernel",
+            "initrd",
+            "cmdline",
+            "disk",
+            "qemu"
+          ],
+          "properties": {
+            "cpus": {"type": "integer", "minimum": 1, "maximum": 255},
+            "memory": {"$ref": "#/$defs/memory"},
+            "vcpu_type": {"$ref": "#/$defs/vcpuType"},
+            "vmm_type": {"const": "QEMU"},
+            "guest_features": {"type": "string", "pattern": "^0x[0-9a-f]+$"},
+            "mode": {"const": "direct"},
+            "firmware": {"type": "string", "minLength": 1},
+            "kernel": {"type": "string", "minLength": 1},
+            "initrd": {"type": "null"},
+            "cmdline": {"type": "string", "minLength": 1},
+            "disk": {"type": "string", "minLength": 1},
+            "qemu": {"$ref": "#/$defs/snpQemu"}
+          },
+          "additionalProperties": false
+        },
+        "measurement": {"$ref": "#/$defs/sha384"}
+      },
+      "additionalProperties": false
+    },
+    "sevModels": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {"$ref": "#/$defs/vcpuType"},
+      "additionalProperties": {"$ref": "#/$defs/snpRecord"}
+    }
+  },
+  "additionalProperties": false
+}
