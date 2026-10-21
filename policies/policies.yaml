@@ -1,0 +1,6 @@
+policies:
+  - /nvidia/policy.rego
+  - /sev/policy.rego
+  - /tdx/policy.rego
+  - /azure/policy.rego
+data: []

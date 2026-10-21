@@ -52,7 +52,8 @@ def check(version):
         release = t.release_metadata("v0.0.0-integration", "prem-research/trustbase", "0" * 40)
         t.package(inputs, dist, release, None, require_workloads=True)
         result = t.verify_package(dist, require_workloads=True)
-        assert {p.name for p in dist.iterdir()} == {"measurements.json", t.archive_name(release)}
+        assert {p.name for p in dist.iterdir()} == set(t.release_assets(release))
+        assert t.policy_payloads(t.ROOT) == t.policy_payloads(inputs)
         assert len(result["workloads"]) == 2
         profiles = {p["id"]: p["podvm"]["profile"] for p in manifest["profiles"]}
         variants = set()

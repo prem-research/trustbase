@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build exact-byte Init-Data and PodVM reference measurements."""
+"""Build exact-byte Init-Data measurements and attestation policy releases."""
 from __future__ import annotations
 
 import argparse
@@ -185,6 +185,28 @@ def load_revoked(root):
     digests = [entry["sha256"] for entry in entries]
     require(len(set(digests)) == len(digests), "duplicate revoked Init-Data digest")
     return entries
+
+
+def policy_payloads(root):
+    """Public policy names and bytes, read only from this authoring root or snapshot."""
+    root = Path(root)
+    doc = yaml.load(source_file(root, "policies/policies.yaml").read_bytes(), Loader=UniqueLoader)
+    check_schema(doc, "policies.schema.json")
+    payloads = {"policies.json": json_bytes(doc)}
+    for name in doc["policies"]:
+        path = relative_path(name.removeprefix("/"))
+        require(all(re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", part) for part in path.parts),
+                f"unsafe policy path: {name!r}")
+        require(path.parts[0] not in ("measurements.json", "policies.json", BUNDLE_NAME),
+                f"policy path conflicts with a Pages file: {name}")
+        payloads[name] = source_file(root, "policies" + name).read_bytes()
+    found = set()
+    for path in (root / "policies").rglob("*"):
+        require(not path.is_symlink(), f"symlinks are not allowed: {path}")
+        if path.is_file() and path.suffix == ".rego":
+            found.add("/" + path.relative_to(root / "policies").as_posix())
+    require(found == set(doc["policies"]), f"unlisted Rego policies: {sorted(found - set(doc['policies']))}")
+    return payloads
 
 
 def validate(root, require_workloads=False):
@@ -438,11 +460,17 @@ def fresh_directory(path):
 
 def resolve(root, output, github=None, trusted_root=None):
     manifest = validate(root)
+    policies = policy_payloads(ROOT)
     output = fresh_directory(output)
     github = github or GitHub()
     selections, releases = select_releases(manifest, github.releases()) if manifest["profiles"] else ({}, {})
     with tempfile.TemporaryDirectory(prefix=".trustbase-resolve-", dir=output.parent) as temporary:
         staging = Path(temporary)
+        write_file(staging, "policies/policies.yaml",
+                   source_file(ROOT, "policies/policies.yaml").read_bytes())
+        for name, raw in policies.items():
+            if name.startswith("/"):
+                write_file(staging, "policies" + name, raw)
         write_file(staging, "measurements.yaml", source_file(root, "measurements.yaml").read_bytes())
         if (root / "revoked.yaml").exists() or (root / "revoked.yaml").is_symlink():
             write_file(staging, "revoked.yaml", source_file(root, "revoked.yaml").read_bytes())
@@ -481,6 +509,7 @@ def resolve(root, output, github=None, trusted_root=None):
         # Revalidate the copied bytes to detect authoring input changes during resolution.
         copied = validate(staging)
         require(copied == manifest, "manifest changed during resolution")
+        require(policy_payloads(staging) == policies, "policies changed during resolution")
         shutil.copytree(staging, output)
     return lock
 
@@ -497,6 +526,7 @@ def read_snapshot(inputs, trusted_root=None):
         require(source_file(inputs, name).read_bytes() == path.read_bytes(),
                 f"snapshot schema differs from this Trustbase version: {name}")
     manifest = validate(inputs)
+    policy_payloads(inputs)
     ids = {profile["id"] for profile in manifest["profiles"]}
     require(set(lock["workloads"]) == ids, "resolution workload set differs from manifest")
     selected = {tag for tags in lock["workloads"].values() for tag in tags}
@@ -607,13 +637,42 @@ def archive_name(release):
     return f"trustbase-inputs-{release['version']}.tar.gz"
 
 
+def release_assets(release):
+    return ("measurements.json", "policies.json", archive_name(release))
+
+
+def release_payloads(dist):
+    """Export subjects from a candidate already checked by verify_package.
+
+    The publish and Pages jobs exchange the verified release artifact, never
+    policies read from a later checkout. Extraction still validates paths and
+    checks that the public index agrees with the frozen YAML.
+    """
+    dist = Path(dist)
+    result = load_json(source_file(dist, "measurements.json").read_bytes())
+    check_schema(result, "measurements.schema.json")
+    release = result["release"]
+    assets = {name: source_file(dist, name).read_bytes() for name in release_assets(release)}
+    require({p.name for p in dist.iterdir()} in (set(assets), set(assets) | {BUNDLE_NAME}),
+            "unexpected release assets")
+    with tempfile.TemporaryDirectory(prefix="trustbase-policies-") as temporary:
+        inputs = Path(temporary)
+        unpack(source_file(dist, archive_name(release)), inputs)
+        policies = policy_payloads(inputs)
+        require(assets["policies.json"] == policies["policies.json"],
+                "policy index differs from frozen inputs")
+        assets.update(policies)
+    return assets
+
+
 def package(inputs, output, release, previous=None, trusted_root=None, require_workloads=False):
-    """Write the two release payloads; the publication job adds the provenance bundle."""
+    """Write three release assets; policies are also frozen inside the input archive."""
     output = fresh_directory(output)
     result = catalog(inputs, release, previous, trusted_root)
     require(not require_workloads or result["workloads"],
             "publication requires at least one production workload")
-    assets = {"measurements.json": json_bytes(result), archive_name(release): archive_bytes(inputs)}
+    assets = {"measurements.json": json_bytes(result), archive_name(release): archive_bytes(inputs),
+              "policies.json": policy_payloads(inputs)["policies.json"]}
     with tempfile.TemporaryDirectory(prefix=".trustbase-package-", dir=output.parent) as temporary:
         staging = Path(temporary)
         for key, raw in assets.items():
@@ -656,21 +715,26 @@ def parse_timestamp(value):
     return datetime.datetime.fromisoformat(match.group(1) + fraction + match.group(3).replace("Z", "+00:00"))
 
 
-def verify_release_provenance(dist, release, trusted_root=None):
-    """Authenticate both payloads with the published bundle; return the signing time."""
+def verify_release_provenance(dist, release, policies, trusted_root=None):
+    """Authenticate every release subject; return the signing time."""
     require(release["source_repository"] == TRUSTBASE_REPO,
             f"provenance is only verified for {TRUSTBASE_REPO} releases")
     bundle = source_file(dist, BUNDLE_NAME)
     expected = {name: hash_file(source_file(dist, name))
-                for name in ("measurements.json", archive_name(release))}
+                for name in release_assets(release)}
+    expected.update({name: sha256(raw) for name, raw in policies.items() if name.startswith("/")})
     repository_id = github_repository_id(TRUSTBASE_REPO)
     timestamps = []
-    for name in expected:
+    # All subjects share one statement. Verifying the uploaded assets authenticates
+    # that statement; its exact subject set also binds every archived policy byte.
+    for name in release_assets(release):
         for item in verify_attestation(dist / name, bundle, release["version"], release["source_revision"],
                                        trusted_root, repo=TRUSTBASE_REPO, workflow=TRUSTBASE_WORKFLOW):
             verification = item["verificationResult"]
-            subjects = {s["name"]: s["digest"]["sha256"] for s in verification["statement"]["subject"]}
-            require(subjects == expected, f"{name}: attestation subjects differ from the release payloads")
+            listed = verification["statement"]["subject"]
+            subjects = {s["name"]: s["digest"]["sha256"] for s in listed}
+            require(len(listed) == len(expected) and subjects == expected,
+                    f"{name}: attestation subjects differ from the release payloads")
             certificate = verification["signature"]["certificate"]
             require(certificate.get("sourceRepositoryIdentifier") == repository_id,
                     f"{name}: attestation was issued for another repository id")
@@ -705,7 +769,8 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
         "revision": result["release"]["source_revision"],
     })
     archive = archive_name(release)
-    require(names in ({"measurements.json", archive}, {"measurements.json", archive, BUNDLE_NAME}),
+    assets = set(release_assets(release))
+    require(names in (assets, assets | {BUNDLE_NAME}),
             "unexpected release assets")
     require("previous" in result["release"] and "revoked" in result,
             "release lacks the previous/revoked chain fields")
@@ -719,15 +784,18 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
         require(actual is not None and actual >= floor,
                 f"release {release['version']} is below the minimum version {min_version}")
     require(max_age is None or require_provenance, "a maximum age requires provenance verification")
-    if require_provenance:
-        signed_at = verify_release_provenance(dist, release, trusted_root)
-        age = time.time() - signed_at.timestamp()
-        if max_age is not None:
-            require(age <= max_age,
-                    f"release signing event is {int(age)} s old, above the maximum {int(max_age)} s")
     with tempfile.TemporaryDirectory(prefix="trustbase-verify-") as temporary:
         inputs = Path(temporary)
         unpack(dist / archive, inputs)
+        policies = policy_payloads(inputs)
+        require(source_file(dist, "policies.json").read_bytes() == policies["policies.json"],
+                "policy index differs from frozen inputs")
+        if require_provenance:
+            signed_at = verify_release_provenance(dist, release, policies, trusted_root)
+            age = time.time() - signed_at.timestamp()
+            if max_age is not None:
+                require(age <= max_age,
+                        f"release signing event is {int(age)} s old, above the maximum {int(max_age)} s")
         expected = catalog(inputs, release, previous, trusted_root)
         require(json_bytes(expected) == raw_catalog, "catalog differs from frozen inputs")
         require(sha256(archive_bytes(inputs)) == hash_file(dist / archive),
@@ -765,7 +833,7 @@ def parser():
     verify.add_argument("--dist", type=Path, required=True)
     verify.add_argument("--require-workloads", action="store_true")
     verify.add_argument("--require-provenance", action="store_true",
-                        help="authenticate both payloads with the published Sigstore bundle")
+                        help="authenticate all payloads with the published Sigstore bundle")
     verify.add_argument("--min-version", help="reject releases below this stable version")
     verify.add_argument("--max-age", type=float,
                         help="reject releases whose verified signing event is older than this many seconds")
@@ -789,6 +857,7 @@ def main():
     try:
         if args.command == "validate":
             manifest = validate(args.root, args.require_workloads)
+            policy_payloads(ROOT)
             print(f"Validated {len(manifest['profiles'])} workload(s)")
         elif args.command == "resolve":
             lock = resolve(args.root, args.output, trusted_root=args.trusted_root)

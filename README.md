@@ -1,6 +1,6 @@
 # Trustbase
 
-Trustbase publishes reference measurements for confidential workloads.
+Trustbase publishes reference measurements and attestation policies for confidential workloads.
 Each workload combines an exact Init-Data TOML with a named
 [prem-research/podvm](https://github.com/prem-research/podvm) launch profile and a
 semver constraint. A release freezes every matching published stable PodVM
@@ -14,6 +14,42 @@ every check passes (see [Candidate submission and admission](#candidate-submissi
 The definitions under `examples/` demonstrate CPU and NVIDIA selection with
 policies that deny container creation. They are tested separately and are never
 included in production releases.
+
+## Attestation policies
+
+The attestation policies imported from `prem-research/confidential-policies`
+(`infra-v2`) live under `policies/`. Edit `policies/policies.yaml` to register
+their public paths:
+
+~~~yaml
+policies:
+  - /nvidia/policy.rego
+  - /sev/policy.rego
+  - /tdx/policy.rego
+  - /azure/policy.rego
+data: []
+~~~
+
+Every entry maps to the corresponding file beneath `policies/`, and every Rego
+file there must be registered exactly once. Paths must name `.rego` files inside
+folders; missing files, symlinks, unsafe paths, duplicate YAML keys, and paths
+that conflict with Pages root files are rejected. `data` stays empty: clients
+load the measurements catalog separately as `data.measurements`.
+
+`make validate` checks this catalog. `resolve` freezes the YAML and exact Rego
+bytes into the input snapshot, including for `--root examples` builds; policies
+are shared repository inputs rather than duplicated example definitions.
+`package` generates `policies.json` from the frozen YAML. The JSON retains the
+`policies` and `data` arrays and the listed policy order. Only YAML is authored;
+the generated JSON is a release asset.
+
+After a successful tag deployment, discover policies at
+<https://trustbase.prem.io/policies.json> and download each entry relative to that
+origin, for example <https://trustbase.prem.io/tdx/policy.rego>. All four policies
+are published under their own folders. Each policy path and SHA-256 digest is
+also an individual subject in `provenance.sigstore.json`, alongside the generated
+index, measurements catalog, and input archive. Policy logic is separate from
+the Kata agent policy embedded in workload Init-Data.
 
 ## Define a workload
 
@@ -258,23 +294,28 @@ takes `--require-provenance`, `--min-version`, `--max-age`, and `--previous-dist
 
 ## Release format and relying-party use
 
-Each release contains exactly three uploaded assets:
+Each release contains exactly four uploaded assets:
 
 | Asset | Contents |
 |---|---|
 | `measurements.json` | Attestation references indexed by workload ID, the chain link to the previous release, and the cumulative revocation list |
-| `trustbase-inputs-<tag>.tar.gz` | Exact Init-Data TOMLs, manifest, `revoked.yaml`, schemas, resolution lock, and the upstream PodVM assets with their attestation bundles |
-| `provenance.sigstore.json` | One Sigstore bundle: the signed in-toto statement naming both payloads as subjects, the signing certificate, and verification material (a public transparency-log entry for public repositories or a signed timestamp for internal repositories) |
+| `policies.json` | Policy discovery index generated from the frozen `policies/policies.yaml`, with root-relative Rego URLs and `data: []` |
+| `trustbase-inputs-<tag>.tar.gz` | Exact Init-Data TOMLs, manifest, `revoked.yaml`, policy YAML and Rego files, schemas, resolution lock, and the upstream PodVM assets with their attestation bundles |
+| `provenance.sigstore.json` | One Sigstore bundle naming the three payload assets and each individual policy path with its digest, plus the signing certificate and verification material (a public transparency-log entry for public repositories or a signed timestamp for internal repositories) |
 
 GitHub's automatic source archives are separate. The bundle is the output of the
 release workflow's `attest-build-provenance` step, so the same attestation is also
 discoverable through GitHub's API; publishing it with the release lets verifiers
-work from the three files alone. Releases published before this format carried a
-`SHA256SUMS` file and per-asset attestations instead. The current `verify` command
-rejects those legacy Trustbase releases. Historical verification requires checking
-each old asset against its per-asset attestation and the expected tag, source
-commit, repository, and signer workflow. The current release chain can be checked
-back to `v0.0.10`; walking its older `v0.0.7` link requires that separate procedure.
+work from the four files alone. Rego files are stored inside the existing input
+archive, not uploaded individually. Their provenance subject names match the
+index entries exactly, such as `/tdx/policy.rego`.
+
+The current `verify` command rejects older releases without the policy assets,
+as well as legacy releases with `SHA256SUMS` and per-asset attestations. This also
+applies to predecessor verification: an old-format predecessor blocks the next
+release rather than silently resetting the chain. Historical verification requires
+the verifier for that release format and checking the expected tag, source
+commit, repository, and signer workflow.
 
 The catalog follows `schemas/measurements.schema.json` and carries only the
 values a relying party matches against evidence. At `workloads[<id>]`:
@@ -318,9 +359,10 @@ python trustbase.py verify --dist dist --require-provenance --require-workloads 
 ~~~
 
 With `--require-provenance`, `verify` runs `gh attestation verify --bundle` for
-both payloads against this repository, its `release.yml` signer workflow, the
-release tag, and the source commit recorded in the catalog; it then requires the
-statement's subjects to be exactly the two payloads with their digests, requires a
+all three payload assets against this repository, its `release.yml` signer
+workflow, the release tag, and the source commit recorded in the catalog; it then requires the
+statement's subjects to be exactly those assets and every indexed Rego file with
+their SHA-256 digests. Duplicate subject names are rejected. The command requires a
 verified signing timestamp, and compares the certificate's repository ID with
 the current ID fetched from GitHub. `--require-provenance` needs GitHub API access.
 `--max-age` bounds the age of that signing event (the Rekor integration time on a public
@@ -367,9 +409,10 @@ pinned. No confidential hardware or KVM is required. Empty production catalogs
 produce empty preview catalogs so bootstrap CI remains usable.
 
 A stable `vX.Y.Z` tag push runs the same checks and requires a nonempty production
-catalog. A separate publication job verifies the candidate, attests the two
-payloads, attaches the resulting bundle as `provenance.sigstore.json`, verifies the
-signed three-file set with `--require-provenance`, creates a draft release, then
+catalog. A separate publication job verifies the candidate, attests both
+catalogs, the input archive, and individual policies, attaches the resulting
+bundle as `provenance.sigstore.json`, verifies the signed four-file set with
+`--require-provenance`, creates a draft release, then
 publishes it. Existing releases, including interrupted drafts, are rejected; assets
 are never clobbered. Publication uses only `GITHUB_TOKEN` and GitHub OIDC.
 Tag workflows queue behind one another, and publication checks that its
@@ -431,9 +474,19 @@ In coco-fleet, `check.yml` already uses `FLEET_DISPATCH_APP_CLIENT_ID` and
 App creation steps under "Submit to Trustbase, Setup".
 
 After a successful release publication, a separate job deploys the identical
-`measurements.json` and `provenance.sigstore.json` to GitHub Pages. Each
-successful tag deployment replaces those files; use the immutable release assets
-when pinning a particular version.
+`measurements.json`, `policies.json`, and `provenance.sigstore.json` to the GitHub
+Pages root. It extracts the listed Rego files from that release's input archive
+into their URL folders, without a `policies/` URL prefix. Each successful tag
+deployment replaces the site; removed policies disappear too. Use immutable
+release assets when pinning a particular version.
+
+The workflow uses `python .github/scripts/release.py subjects` to generate
+`build/provenance-subjects.txt` from a verified `dist/`, preserving full policy
+paths in the attestation. This checksum list is an internal signing input, not
+an uploaded release asset. `python .github/scripts/release.py pages` exports
+the published `dist/` into a fresh `_site/` using the archived policies, not the
+checkout's current policy files. These helpers consume the candidate already
+accepted by the release verification gate; they do not replace signature verification.
 
 Main pushes and manual runs do not publish. All tag runs are serialized and
 queued; none is cancelled by a later tag.
