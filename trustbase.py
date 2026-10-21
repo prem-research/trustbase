@@ -513,11 +513,10 @@ def read_snapshot(inputs, trusted_root=None):
     check_schema(lock, "resolution.schema.json")
     require(lock["repository"] == PODVM_REPO, "unexpected PodVM repository in resolution")
     require(inventory(inputs) == lock["files"], "frozen input inventory/checksum mismatch")
-    # Never let schemas supplied by an input archive redefine our validation rules.
-    for path in (ROOT / "schemas").rglob("*.json"):
-        name = path.relative_to(ROOT).as_posix()
-        require(source_file(inputs, name).read_bytes() == path.read_bytes(),
-                f"snapshot schema differs from this Trustbase version: {name}")
+    archived = sorted(p for p in (inputs / "schemas").rglob("*.json") if p.is_file())
+    require(archived, "snapshot carries no schema documents")
+    for path in archived:
+        load_json(source_file(inputs, path.relative_to(inputs).as_posix()).read_bytes())
     manifest = validate(inputs)
     ids = {profile["id"] for profile in manifest["profiles"]}
     require(set(lock["workloads"]) == ids, "resolution workload set differs from manifest")

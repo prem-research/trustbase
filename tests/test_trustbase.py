@@ -778,3 +778,24 @@ class RolloutOverlapTests(Workspace):
                 catalog.write_bytes(t.json_bytes(doc))
                 with self.subTest(message=message), self.assertRaisesRegex(t.Error, message):
                     t.verify_package(dist)
+
+
+class SchemaEvolutionTests(Workspace):
+    """A release is verified against its predecessor, which an older Trustbase version produced."""
+
+    def test_older_archived_schemas_verify_and_malformed_ones_are_rejected(self):
+        inputs = self.snapshot()
+        schema = inputs / "schemas" / "manifest.schema.json"
+        older = t.load_json(schema.read_bytes())
+        older["properties"]["profiles"]["items"]["properties"].pop("previous")
+        self.refresh_inventory(inputs, lambda lock: schema.write_bytes(t.json_bytes(older)))
+        dist = self.base / "dist"
+        with patch.object(t, "verify_attestation"):
+            t.package(inputs, dist, RELEASE)
+            t.verify_package(dist)
+            self.refresh_inventory(inputs, lambda lock: schema.write_bytes(b"{not json"))
+            with self.assertRaises((t.Error, ValueError)):
+                t.package(inputs, self.base / "dist-malformed", RELEASE)
+            self.refresh_inventory(inputs, lambda lock: shutil.rmtree(inputs / "schemas"))
+            with self.assertRaisesRegex(t.Error, "no schema documents"):
+                t.package(inputs, self.base / "dist-missing", RELEASE)
