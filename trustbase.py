@@ -187,6 +187,22 @@ def load_revoked(root):
     return entries
 
 
+def parse_not_after(value):
+    """The absolute UTC deadline after which a replaced Init-Data is no longer acceptable."""
+    try:
+        return datetime.datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    except (TypeError, ValueError) as exc:
+        raise Error(f"invalid not_after timestamp: {value!r}") from exc
+
+
+def initdata_paths(profile):
+    """The current Init-Data path and, during a rollout overlap, the replaced one."""
+    paths = [profile["initdata"]]
+    if "previous" in profile:
+        paths.append(profile["previous"]["initdata"])
+    return paths
+
+
 def validate(root, require_workloads=False):
     root = Path(root)
     manifest = yaml.load(source_file(root, "measurements.yaml").read_bytes(),
@@ -195,11 +211,8 @@ def validate(root, require_workloads=False):
     ids = set()
     paths = set()
     digests = set()
-    for profile in manifest["profiles"]:
-        ident = profile["id"]
-        require(ident not in ids, f"duplicate workload id: {ident}")
-        ids.add(ident)
-        path = profile["initdata"]
+
+    def register(ident, path):
         match = re.fullmatch(r"init-data/([0-9a-f]{64})\.toml", path)
         require(match is not None, f"{ident}: expected init-data/<sha256>.toml")
         require(path not in paths, f"{ident}: Init-Data file is already assigned: {path}")
@@ -208,6 +221,15 @@ def validate(root, require_workloads=False):
         require(match.group(1) == sha256(raw), f"{ident}: Init-Data filename SHA-256 mismatch")
         digests.add(match.group(1))
         initdata(raw, ident)
+
+    for profile in manifest["profiles"]:
+        ident = profile["id"]
+        require(ident not in ids, f"duplicate workload id: {ident}")
+        ids.add(ident)
+        for path in initdata_paths(profile):
+            register(ident, path)
+        if "previous" in profile:
+            parse_not_after(profile["previous"]["not_after"])
         constraint(profile["podvm"]["version"])
     # Every production definition must be represented in the catalog.
     directory = root / "init-data"
@@ -447,8 +469,8 @@ def resolve(root, output, github=None, trusted_root=None):
         if (root / "revoked.yaml").exists() or (root / "revoked.yaml").is_symlink():
             write_file(staging, "revoked.yaml", source_file(root, "revoked.yaml").read_bytes())
         for profile in manifest["profiles"]:
-            write_file(staging, profile["initdata"],
-                       source_file(root, profile["initdata"]).read_bytes())
+            for path in initdata_paths(profile):
+                write_file(staging, path, source_file(root, path).read_bytes())
         for schema in sorted((ROOT / "schemas").rglob("*.json")):
             write_file(staging, schema.relative_to(ROOT).as_posix(), schema.read_bytes())
         locked = {}
@@ -570,11 +592,18 @@ def catalog(inputs, release, previous=None, trusted_root=None):
             if selected["sev"]:
                 entry["snp"] = {cpu: data["measurement"]
                                 for cpu, data in sorted(selected["sev"].items())}
-        workloads[ident] = {
-            "initdata": {"path": path, **{key: values[key]
-                         for key in ("algorithm", "digest", "sha256", "host_data", "mr_config_id")}},
-            "releases": releases,
-        }
+        def reference(path, values):
+            return {"path": path, **{key: values[key]
+                    for key in ("algorithm", "digest", "sha256", "host_data", "mr_config_id")}}
+
+        workloads[ident] = {"initdata": reference(path, values), "releases": releases}
+        if "previous" in profile:
+            previous_path = profile["previous"]["initdata"]
+            previous_values = initdata(source_file(inputs, previous_path).read_bytes(), ident)
+            workloads[ident]["previous_initdata"] = {
+                **reference(previous_path, previous_values),
+                "not_after": profile["previous"]["not_after"],
+            }
     result = {
         "schema_version": 1,
         "schema": f"https://raw.githubusercontent.com/{release['source_repository']}/"
@@ -711,7 +740,8 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
             "release lacks the previous/revoked chain fields")
     previous = result["release"]["previous"]
     revoked = {entry["sha256"] for entry in result["revoked"]}
-    referenced = {w["initdata"]["sha256"] for w in result["workloads"].values()}
+    referenced = {w[key]["sha256"] for w in result["workloads"].values()
+                  for key in ("initdata", "previous_initdata") if key in w}
     require(not revoked & referenced, "revoked Init-Data is still referenced by the catalog")
     if min_version is not None:
         floor, actual = stable_version(min_version), stable_version(release["version"])

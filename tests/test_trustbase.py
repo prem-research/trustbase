@@ -1,6 +1,7 @@
 """Offline contract tests. Only external GitHub and signature verification are mocked."""
 import base64
 import copy
+import datetime
 import gzip
 import io
 import json
@@ -701,3 +702,79 @@ class PackagingTests(Workspace):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RolloutOverlapTests(Workspace):
+    """A replaced Init-Data stays registered as `previous` with an absolute deadline."""
+
+    DEADLINE = "2026-10-22T12:00:00Z"
+
+    def previous_for(self, ident):
+        doc = t.validate(self.root)
+        profile = next(p for p in doc["profiles"] if p["id"] == ident)
+        raw = (self.root / profile["initdata"]).read_bytes() + b"# previous revision\n"
+        path = f"init-data/{t.sha256(raw)}.toml"
+        (self.root / path).write_bytes(raw)
+        profile["previous"] = {"initdata": path, "not_after": self.DEADLINE}
+        (self.root / "measurements.yaml").write_bytes(t.json_bytes(doc))
+        return path, raw
+
+    def test_previous_is_validated_like_the_current_definition(self):
+        path, raw = self.previous_for("model-router")
+        valid = t.validate(self.root)
+        self.assertEqual(t.initdata_paths(valid["profiles"][0]), [valid["profiles"][0]["initdata"], path])
+        self.assertEqual(t.parse_not_after(self.DEADLINE),
+                         datetime.datetime(2026, 10, 22, 12, tzinfo=datetime.timezone.utc))
+        for value in ("2026-10-22T12:00:00", "2026-10-22 12:00:00Z", "2026-13-01T00:00:00Z", "soon", None):
+            with self.subTest(value=value), self.assertRaisesRegex(t.Error, "invalid not_after"):
+                t.parse_not_after(value)
+        other = valid["profiles"][1]["initdata"]
+        for message, edit in (
+            ("invalid not_after", lambda d: d["profiles"][0]["previous"].update(not_after="2026-13-01T00:00:00Z")),
+            ("does not match", lambda d: d["profiles"][0]["previous"].update(not_after="2026-10-22T12:00:00+00:00")),
+            ("already assigned", lambda d: d["profiles"][0]["previous"].update(initdata=d["profiles"][0]["initdata"])),
+            ("already assigned", lambda d: d["profiles"][1].update(previous={"initdata": path, "not_after": self.DEADLINE})),
+            ("data.id must exactly match", lambda d: d["profiles"][0]["previous"].update(initdata=other)),
+            ("unlisted Init-Data", lambda d: d["profiles"][0].pop("previous")),
+            ("required property", lambda d: d["profiles"][0]["previous"].pop("not_after")),
+        ):
+            doc = copy.deepcopy(valid)
+            edit(doc)
+            (self.root / "measurements.yaml").write_bytes(t.json_bytes(doc))
+            with self.subTest(message=message), self.assertRaisesRegex(t.Error, message):
+                t.validate(self.root)
+        (self.root / "measurements.yaml").write_bytes(t.json_bytes(valid))
+        (self.root / "revoked.yaml").write_text(
+            f"schema_version: 1\nentries:\n  - id: model-router\n    sha256: '{t.sha256(raw)}'\n    reason: faulty\n")
+        with self.assertRaisesRegex(t.Error, "revoked Init-Data is still registered"):
+            t.validate(self.root)
+
+    def test_catalog_carries_previous_initdata_with_its_deadline(self):
+        path, raw = self.previous_for("model-router")
+        inputs = self.snapshot()
+        self.assertTrue((inputs / path).is_file(), "the frozen inputs include the previous definition")
+        dist = self.base / "dist"
+        with patch.object(t, "verify_attestation"):
+            result = t.package(inputs, dist, RELEASE)
+            values = t.initdata(raw, "model-router")
+            self.assertEqual(result["workloads"]["model-router"]["previous_initdata"], {
+                "path": path, "not_after": self.DEADLINE,
+                **{key: values[key] for key in ("algorithm", "digest", "sha256", "host_data", "mr_config_id")}})
+            self.assertNotIn("previous_initdata", result["workloads"]["example-model"])
+            t.verify_package(dist)
+            catalog = dist / "measurements.json"
+            original = catalog.read_bytes()
+            for message, edit in (
+                ("revoked Init-Data is still referenced",
+                 lambda d: d.update(revoked=[{"id": "model-router", "sha256": t.sha256(raw), "reason": "faulty"}])),
+                ("not_after", lambda d: d["workloads"]["model-router"]["previous_initdata"].pop("not_after")),
+                ("extra", lambda d: d["workloads"]["model-router"]["initdata"].update(extra=1)),
+                ("extra", lambda d: d["workloads"]["model-router"]["previous_initdata"].update(extra=1)),
+                ("catalog differs", lambda d: d["workloads"]["model-router"]["previous_initdata"].update(
+                    not_after="2030-01-01T00:00:00Z")),
+            ):
+                doc = t.load_json(original)
+                edit(doc)
+                catalog.write_bytes(t.json_bytes(doc))
+                with self.subTest(message=message), self.assertRaisesRegex(t.Error, message):
+                    t.verify_package(dist)

@@ -176,3 +176,4 @@ floor:
   device_binds:
   - /dev/sev-guest
   max_gpu_devices: 1
+  rollout_overlap_seconds: 86400

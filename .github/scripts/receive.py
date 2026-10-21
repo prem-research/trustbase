@@ -8,6 +8,7 @@ gate, and packages a candidate release. The separate publish job applies the pre
 and pushes the import commit and next `vX.Y.Z` tag atomically with the release bot's token.
 """
 import base64
+import datetime
 import http.client
 import json
 import os
@@ -86,12 +87,28 @@ def fetch_candidate(payload, config, token):
     return raw
 
 
+def utcnow():
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def overlap_deadline(config):
+    """When the Init-Data replaced by this import stops being acceptable."""
+    seconds = config["floor"]["rollout_overlap_seconds"]
+    return (utcnow() + datetime.timedelta(seconds=seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def import_candidate(root, payload, raw):
-    """Place the TOML and create or update its registration within the reviewed floor."""
+    """Place the TOML and create or update its registration within the reviewed floor.
+
+    A replaced Init-Data is kept as the profile's `previous` with an absolute `not_after`
+    deadline, so a rollout can overlap old and new pods; the definition it displaces in turn
+    is deleted.
+    """
     root = Path(root)
     ident, digest = payload["workload"], payload["sha256"]
     manifest = t.validate(root)
-    profile = validate_payload(payload, admission.load_config(root), manifest)
+    config = admission.load_config(root)
+    profile = validate_payload(payload, config, manifest)
     t.require(t.sha256(raw) == digest, "candidate bytes do not match the dispatched SHA-256")
     t.initdata(raw, ident)
     t.require(digest not in {entry["sha256"] for entry in t.load_revoked(root)}, "candidate is revoked")
@@ -103,19 +120,23 @@ def import_candidate(root, payload, raw):
         if profile is not None and profile["initdata"] == target and profile["podvm"] == payload["podvm"]:
             return False
     manifest_path = root / "measurements.yaml"
-    previous = profile["initdata"] if profile is not None else None
+    retired = None
     if profile is None:
-        manifest["profiles"].append({"id": ident, "initdata": target, "podvm": payload["podvm"]})
+        profile = {"id": ident, "initdata": target, "podvm": payload["podvm"]}
+        manifest["profiles"].append(profile)
     else:
+        current = profile["initdata"]
+        if current != target:
+            retired = profile.get("previous", {}).get("initdata")
+            profile["previous"] = {"initdata": current, "not_after": overlap_deadline(config)}
         profile["initdata"] = target
         profile["podvm"] = payload["podvm"]
     path.write_bytes(raw)
     manifest_path.write_text(yaml.safe_dump(manifest, sort_keys=False))
-    if previous is not None and previous != target:
-        (root / previous).unlink()
+    if retired is not None and retired not in t.initdata_paths(profile):
+        (root / retired).unlink()
     updated = t.validate(root)
-    t.require(next(p for p in updated["profiles"] if p["id"] == ident) ==
-              {"id": ident, "initdata": target, "podvm": payload["podvm"]},
+    t.require(next(p for p in updated["profiles"] if p["id"] == ident) == profile,
               "registration did not take effect")
     return True
 
@@ -201,15 +222,17 @@ def previous_release(root):
 
 
 def publish(root, repository, token, tag, message):
-    auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-    git = ["git", "-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {auth}",
-           "-c", "user.name=trustbase-bot", "-c", "user.email=trustbase-bot@users.noreply.github.com"]
+    git = ["git", "-c", "user.name=trustbase-bot", "-c", "user.email=trustbase-bot@users.noreply.github.com"]
     subprocess.run(git + ["add", "-A", "--", "init-data", "measurements.yaml"], check=True, cwd=root)
     subprocess.run(git + ["commit", "-q", "-m", message], check=True, cwd=root)
     subprocess.run(git + ["tag", tag], check=True, cwd=root)
     print(f"+ git push --atomic origin HEAD:main refs/tags/{tag}", flush=True)
+    auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    env = {**os.environ, "GIT_CONFIG_COUNT": "1",
+           "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+           "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {auth}"}
     subprocess.run(git + ["push", "--atomic", f"https://github.com/{repository}", "HEAD:refs/heads/main",
-                          f"refs/tags/{tag}"], check=True, cwd=root)
+                          f"refs/tags/{tag}"], check=True, cwd=root, env=env)
 
 
 def prepared_change(root, payload, repository, tag, message):
@@ -227,6 +250,23 @@ def prepared_change(root, payload, repository, tag, message):
     }))
 
 
+def changed_paths(root):
+    """Every path that differs from HEAD, including new files, after a patch is applied."""
+    raw = subprocess.run(["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                         check=True, capture_output=True, cwd=root).stdout
+    fields = raw.split(b"\0")
+    paths = set()
+    index = 0
+    while index < len(fields) and fields[index]:
+        entry = fields[index].decode()
+        paths.add(entry[3:])
+        if entry[0] in "RC":
+            index += 1
+            paths.add(fields[index].decode())
+        index += 1
+    return paths
+
+
 def apply_prepared():
     """Apply only the change produced by this run's read-only preparation job."""
     payload = payload_from_event(os.environ["GITHUB_EVENT_PATH"])
@@ -240,11 +280,21 @@ def apply_prepared():
     patch = OUTPUT / "changes.patch"
     t.require(t.sha256(patch.read_bytes()) == prepared["patch_sha256"],
               "prepared patch digest mismatch")
+    before = t.validate(ROOT)
+    target = f"init-data/{payload['sha256']}.toml"
+    registered = next((p for p in before["profiles"] if p["id"] == payload["workload"]), None)
+    allowed = {"measurements.yaml", target} | set(t.initdata_paths(registered) if registered else [])
     run(["git", "apply", "--check", str(patch)], cwd=ROOT)
     run(["git", "apply", str(patch)], cwd=ROOT)
+    changed = changed_paths(ROOT)
+    t.require(changed and changed <= allowed,
+              f"prepared patch touches files outside the candidate import: {sorted(changed - allowed)}")
     manifest = t.validate(ROOT)
+    others = [p for p in before["profiles"] if p["id"] != payload["workload"]]
+    t.require([p for p in manifest["profiles"] if p["id"] != payload["workload"]] == others,
+              "prepared patch changes workloads other than the dispatched one")
     profile = next((p for p in manifest["profiles"] if p["id"] == payload["workload"]), None)
-    t.require(profile is not None and profile["initdata"] == f"init-data/{payload['sha256']}.toml"
+    t.require(profile is not None and profile["initdata"] == target
               and profile["podvm"] == payload["podvm"],
               "prepared import does not register the dispatched candidate")
     validate_payload(payload, admission.load_config(ROOT), manifest)
