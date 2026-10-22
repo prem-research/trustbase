@@ -101,9 +101,9 @@ class ReleaseTests(unittest.TestCase):
                 with self.assertRaisesRegex(t.Error, "latest published release is v0.9.1"):
                     release.check()
 
-    def test_publish_requires_exactly_the_three_assets(self):
+    def test_publish_requires_exactly_the_four_assets(self):
         assets = [Path("dist/measurements.json"), Path("dist/provenance.sigstore.json"),
-                  Path("dist/trustbase-inputs-v1.0.0.tar.gz")]
+                  Path("dist/policies.json"), Path("dist/trustbase-inputs-v1.0.0.tar.gz")]
         with patch.object(sys, "argv", ["release.py", "publish"]), \
                 patch.object(release, "check", return_value=("v1.0.0", "prem-research/trustbase", "a" * 40)), \
                 patch.object(release, "run") as run:
@@ -118,7 +118,7 @@ class ReleaseTests(unittest.TestCase):
             self.assertFalse(any("--clobber" in command for command in commands))
             for wrong in (assets[:2], assets + [Path("dist/SHA256SUMS")]):
                 with patch.object(Path, "iterdir", return_value=iter(wrong)):
-                    with self.assertRaisesRegex(t.Error, "exactly the two payloads"):
+                    with self.assertRaisesRegex(t.Error, "exactly the three payload assets"):
                         release.main()
 
     def releases(self, *tags, draft=(), prerelease=()):
@@ -136,7 +136,7 @@ class ReleaseTests(unittest.TestCase):
                 output.write_text("")
                 listing = self.releases("v1.0.0", "v1.0.10", "v1.0.9", "v2.0.0", "v1.1.0-rc.1", "dev",
                                         draft=("v2.0.0",), prerelease=("v1.0.9",))
-                verified = {"release": {"version": "v1.0.10"}}
+                verified = {"version": "v1.0.10"}
 
                 def download(command):
                     if command[:3] == ["gh", "release", "download"]:
@@ -145,10 +145,10 @@ class ReleaseTests(unittest.TestCase):
                         (previous / t.BUNDLE_NAME).write_text("{}")
                 with patch.object(release, "api", return_value=listing), \
                         patch.object(release, "run", side_effect=download) as run, \
-                        patch.object(t, "verify_package", return_value=verified) as verify:
+                        patch.object(t, "previous_release", return_value=verified) as verify:
                     release.previous()
                 self.assertEqual(run.call_args_list[0].args[0][:4], ["gh", "release", "download", "v1.0.10"])
-                self.assertEqual(verify.call_args.kwargs, {"require_provenance": True})
+                verify.assert_called_once_with(previous)
                 self.assertEqual(output.read_text(), f"previous={previous}\n")
 
     def test_previous_legacy_release_is_rejected(self):

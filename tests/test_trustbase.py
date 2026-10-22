@@ -97,6 +97,94 @@ class Workspace(unittest.TestCase):
         (inputs / "resolution.json").write_bytes(t.json_bytes(lock))
 
 
+class PolicyTransitionTests(Workspace):
+    def setUp(self):
+        super().setUp()
+        inputs = self.snapshot()
+        self.dist = self.base / "pre-policy-release"
+        with patch.object(t, "verify_attestation"):
+            self.result = t.package(inputs, self.dist, RELEASE)
+        (self.dist / "policies.json").unlink()
+        shutil.rmtree(inputs / "policies")
+        (inputs / "schemas/policies.schema.json").unlink()
+        self.refresh_inventory(inputs)
+        archive = t.archive_name(RELEASE)
+        (self.dist / archive).write_bytes(t.archive_bytes(inputs))
+        (self.dist / t.BUNDLE_NAME).write_text("{}")
+        self.transition = {
+            "version": RELEASE["version"], "source_revision": RELEASE["source_revision"],
+            "files": {name: t.hash_file(self.dist / name) for name in ("measurements.json", archive)},
+        }
+        self.statement = {"verificationResult": {
+            "statement": {"subject": [{"name": name, "digest": {"sha256": digest}}
+                                      for name, digest in self.transition["files"].items()]},
+            "signature": {"certificate": {"sourceRepositoryIdentifier": "12345"}},
+            "verifiedTimestamps": [{"timestamp": "2026-10-20T23:13:22Z"}],
+        }}
+        for mock in (
+            patch.object(t, "POLICY_TRANSITION_PREDECESSOR", self.transition),
+            patch.object(t, "github_repository_id", return_value="12345"),
+        ):
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def test_pinned_predecessor_keeps_chain_but_normal_verification_is_strict(self):
+        with patch.object(t, "verify_attestation", return_value=[self.statement]) as verify:
+            previous = t.previous_release(self.dist)
+        self.assertEqual(previous, {
+            "version": "v1.0.0", "measurements_sha256": self.transition["files"]["measurements.json"],
+            "revoked": self.result["revoked"],
+        })
+        self.assertEqual(verify.call_count, 2)
+        for call in verify.call_args_list:
+            self.assertEqual(call.args[2:4], ("v1.0.0", RELEASE["source_revision"]))
+            self.assertEqual(call.kwargs, {"repo": t.TRUSTBASE_REPO, "workflow": t.TRUSTBASE_WORKFLOW})
+        with self.assertRaisesRegex(t.Error, "unexpected release assets"):
+            t.verify_package(self.dist, require_provenance=True)
+        next_inputs = self.base / "next-inputs"
+        with patch.object(t, "verify_attestation"):
+            t.resolve(self.root, next_inputs, self.gh)
+            newer = t.release_metadata("v1.1.0", t.TRUSTBASE_REPO, "b" * 40)
+            result = t.package(next_inputs, self.base / "new-release", newer, previous)
+            t.verify_package(self.base / "new-release")
+        self.assertEqual(result["release"]["previous"], t.previous_link(previous))
+        with patch.object(t, "verify_attestation", return_value=[self.statement]):
+            t.verify_chain(result, self.dist)
+
+    def test_modified_or_extra_predecessor_assets_are_rejected(self):
+        for name in self.transition["files"]:
+            path = self.dist / name
+            raw = path.read_bytes()
+            path.write_bytes(raw + b"\n")
+            with self.subTest(name=name), patch.object(t, "verify_attestation") as verify:
+                with self.assertRaises(t.Error):
+                    t.previous_release(self.dist)
+                verify.assert_not_called()
+            path.write_bytes(raw)
+        (self.dist / "extra").write_text("")
+        with self.assertRaisesRegex(t.Error, "unexpected policy-transition predecessor assets"):
+            t.previous_release(self.dist)
+
+    def test_predecessor_provenance_is_still_required(self):
+        for edit in (
+            lambda r: r["verificationResult"]["statement"]["subject"].pop(),
+            lambda r: r["verificationResult"]["statement"]["subject"][0]["digest"].update(sha256="0" * 64),
+            lambda r: r["verificationResult"]["signature"]["certificate"].update(sourceRepositoryIdentifier="other"),
+            lambda r: r["verificationResult"].update(verifiedTimestamps=[]),
+        ):
+            bad = copy.deepcopy(self.statement)
+            edit(bad)
+            with patch.object(t, "verify_attestation", return_value=[bad]):
+                with self.assertRaises(t.Error):
+                    t.previous_release(self.dist)
+        with patch.object(t, "verify_attestation", side_effect=t.Error("invalid signature")):
+            with self.assertRaisesRegex(t.Error, "invalid signature"):
+                t.previous_release(self.dist)
+        (self.dist / t.BUNDLE_NAME).unlink()
+        with self.assertRaises(t.Error):
+            t.previous_release(self.dist)
+
+
 class AuthoringTests(Workspace):
     def test_examples_and_empty_production(self):
         self.assertEqual(len(t.validate(self.root)["profiles"]), 2)
@@ -506,13 +594,13 @@ class PackagingTests(Workspace):
             with self.assertRaisesRegex(t.Error, "catalog differs"):
                 t.verify_package(dist)
 
-    def test_package_has_two_payloads_and_provenance_needs_the_bundle(self):
+    def test_package_has_three_payload_assets_and_provenance_needs_the_bundle(self):
         inputs = self.snapshot()
         dist = self.base / "dist"
         with patch.object(t, "verify_attestation"):
             result = t.package(inputs, dist, RELEASE)
             self.assertEqual({p.name for p in dist.iterdir()},
-                             {"measurements.json", "trustbase-inputs-v1.0.0.tar.gz"})
+                             {"measurements.json", "policies.json", "trustbase-inputs-v1.0.0.tar.gz"})
             self.assertIsNone(result["release"]["previous"])
             self.assertEqual(result["revoked"], [])
             self.assertEqual(t.verify_package(dist), result)
@@ -599,8 +687,8 @@ class PackagingTests(Workspace):
                 t.verify_package(self.base / "dist")
 
     def verifier_result(self, dist, repository_id="12345", timestamp="2026-10-19T10:00:00.123456789Z"):
-        subjects = [{"name": name, "digest": {"sha256": t.hash_file(dist / name)}}
-                    for name in ("measurements.json", "trustbase-inputs-v1.0.0.tar.gz")]
+        subjects = [{"name": name, "digest": {"sha256": t.sha256(raw)}}
+                    for name, raw in t.release_payloads(dist).items()]
         return {"attestation": {}, "verificationResult": {
             "statement": {"subject": subjects},
             "signature": {"certificate": {"sourceRepositoryIdentifier": repository_id}},
@@ -620,8 +708,8 @@ class PackagingTests(Workspace):
                                 return_value=subprocess.CompletedProcess([], code, json.dumps([result]), "nope"))
         with verifier(good) as run:
             t.verify_package(dist, require_provenance=True, min_version="v1.0.0", max_age=10 ** 9)
-        # The first two verifier runs authenticate the release payloads; later ones re-verify PodVM.
-        self.assertGreaterEqual(run.call_count, 2)
+        # The first three runs authenticate one statement binding all release subjects.
+        self.assertGreaterEqual(run.call_count, 3)
         command = run.call_args_list[1].args[0]
         for flag, value in (("--repo", t.TRUSTBASE_REPO), ("--signer-workflow", t.TRUSTBASE_WORKFLOW),
                             ("--source-ref", "refs/tags/v1.0.0"), ("--source-digest", "a" * 40),
@@ -645,6 +733,10 @@ class PackagingTests(Workspace):
             (lambda r: r["verificationResult"]["statement"]["subject"][0]["digest"].update(sha256="0" * 64), "subjects differ"),
             (lambda r: r["verificationResult"]["statement"]["subject"].append({"name": "extra", "digest": {"sha256": "1" * 64}}), "subjects differ"),
             (lambda r: r["verificationResult"]["statement"]["subject"].pop(), "subjects differ"),
+            (lambda r: r["verificationResult"]["statement"]["subject"].append(
+                copy.deepcopy(r["verificationResult"]["statement"]["subject"][-1])), "subjects differ"),
+            (lambda r: r["verificationResult"]["statement"]["subject"][-1].update(name="policy.rego"), "subjects differ"),
+            (lambda r: r["verificationResult"]["statement"]["subject"][-1]["digest"].update(sha256="0" * 64), "subjects differ"),
             (lambda r: r["verificationResult"].update(verifiedTimestamps=[]), "no verified signing timestamp"),
             (lambda r: r["verificationResult"]["verifiedTimestamps"][0].update(timestamp="yesterday"), "invalid verifier timestamp"),
         ):
@@ -658,6 +750,12 @@ class PackagingTests(Workspace):
         (other / t.BUNDLE_NAME).write_text("{}")
         with verifier(good), self.assertRaisesRegex(t.Error, "only verified for prem-research/trustbase"):
             t.verify_package(other, require_provenance=True)
+        # Even a consistently rewritten snapshot must match each originally signed policy digest.
+        (inputs / "policies/tdx/policy.rego").write_text("modified policy\n")
+        self.refresh_inventory(inputs)
+        (dist / t.archive_name(RELEASE)).write_bytes(t.archive_bytes(inputs))
+        with verifier(good), self.assertRaisesRegex(t.Error, "subjects differ"):
+            t.verify_package(dist, require_provenance=True)
 
     def test_verifier_timestamps(self):
         for value in ("2026-10-19T10:00:00Z", "2026-10-19T10:00:00.5Z", "2026-10-19T10:00:00.123456789Z",
