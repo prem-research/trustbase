@@ -1,5 +1,6 @@
 """Dispatch receiver tests: GitHub calls, the gate, and git are patched; the import logic is real."""
 import copy
+import datetime
 import importlib.util
 import json
 import os
@@ -115,19 +116,56 @@ class ReceiverTests(unittest.TestCase):
             with self.assertRaisesRegex(t.Error, "do not match the dispatched SHA-256"):
                 receive.fetch_candidate(payload(), CONFIG, "fleet-token")
 
-    def test_import_replaces_registration_and_is_idempotent(self):
-        self.assertTrue(receive.import_candidate(self.root, payload(), CANDIDATE))
+    def test_import_replaces_registration_keeps_previous_until_deadline_and_is_idempotent(self):
+        now = datetime.datetime(2026, 10, 21, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        with patch.object(receive, "utcnow", return_value=now):
+            self.assertTrue(receive.import_candidate(self.root, payload(), CANDIDATE))
         manifest = t.validate(self.root)
         target = f"init-data/{t.sha256(CANDIDATE)}.toml"
         self.assertEqual(manifest["profiles"][0]["initdata"], target)
-        self.assertFalse((self.root / QWEN_PATH).exists())
+        # The replaced definition stays registered as `previous` for the reviewed overlap window.
+        self.assertEqual(manifest["profiles"][0]["previous"],
+                         {"initdata": QWEN_PATH, "not_after": "2026-10-22T12:00:00Z"})
+        self.assertTrue((self.root / QWEN_PATH).exists())
         self.assertEqual((self.root / target).read_bytes(), CANDIDATE)
         text = (self.root / "measurements.yaml").read_text()
         self.assertIn("version: 0.3.18", text)
-        self.assertEqual(text.count("initdata:"), 1)
+        self.assertEqual(text.count("initdata:"), 2)
         self.assertFalse(receive.import_candidate(self.root, payload(), CANDIDATE))
         with self.assertRaisesRegex(t.Error, "do not match the dispatched SHA-256"):
             receive.import_candidate(self.root, payload(), CANDIDATE + b"\n")
+
+    def test_second_replacement_retires_the_oldest_and_rollback_swaps(self):
+        first = CANDIDATE
+        second = CANDIDATE + b"# second revision\n"
+        with patch.object(receive, "utcnow", return_value=datetime.datetime(2026, 10, 21, tzinfo=datetime.timezone.utc)):
+            receive.import_candidate(self.root, payload(), first)
+            receive.import_candidate(self.root, payload(sha256=t.sha256(second),
+                                                        path=f"candidates/{t.sha256(second)}.toml"), second)
+        profile = t.validate(self.root)["profiles"][0]
+        self.assertEqual(profile["initdata"], f"init-data/{t.sha256(second)}.toml")
+        self.assertEqual(profile["previous"]["initdata"], f"init-data/{t.sha256(first)}.toml")
+        self.assertFalse((self.root / QWEN_PATH).exists(), "the definition before `previous` is deleted")
+        # Rolling back to the previous bytes swaps the two registrations and deletes nothing.
+        with patch.object(receive, "utcnow", return_value=datetime.datetime(2026, 10, 22, tzinfo=datetime.timezone.utc)):
+            self.assertTrue(receive.import_candidate(self.root, payload(), first))
+        profile = t.validate(self.root)["profiles"][0]
+        self.assertEqual(profile["initdata"], f"init-data/{t.sha256(first)}.toml")
+        self.assertEqual(profile["previous"], {"initdata": f"init-data/{t.sha256(second)}.toml",
+                                               "not_after": "2026-10-23T00:00:00Z"})
+        self.assertEqual(sorted(p.name for p in (self.root / "init-data").glob("*.toml")),
+                         sorted(f"{t.sha256(raw)}.toml" for raw in (first, second)))
+
+    def test_podvm_only_change_leaves_previous_untouched(self):
+        with patch.object(receive, "utcnow", return_value=datetime.datetime(2026, 10, 21, tzinfo=datetime.timezone.utc)):
+            receive.import_candidate(self.root, payload(), CANDIDATE)
+        before = t.validate(self.root)["profiles"][0]
+        selection = {"profile": "h100-pcie-1-96g", "version": "0.3.19"}
+        self.allow_selection(selection)
+        self.assertTrue(receive.import_candidate(self.root, payload(podvm=selection), CANDIDATE))
+        after = t.validate(self.root)["profiles"][0]
+        self.assertEqual(after, {**before, "podvm": selection})
+        self.assertTrue((self.root / QWEN_PATH).exists())
 
     def test_import_refuses_revoked_and_wrong_workload_identity(self):
         (self.root / "revoked.yaml").write_text(
@@ -233,7 +271,9 @@ class ReceiverTests(unittest.TestCase):
         self.assertFalse(push.called)
         self.assertFalse((output / "prepared.json").exists())
 
-    def test_prepared_patch_applies_to_fresh_checkout_before_write_token(self):
+    def prepare_in_clone(self, widen=None, workload=NEW_ID, raw=NEW_CANDIDATE):
+        """Commit the fixture root, import a candidate there (optionally widening the working tree
+        before the patch is recorded), and return a fresh clone with the prepared artifact."""
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         subprocess.run(["git", "-C", str(self.root), "add", "-A"], check=True)
         subprocess.run(["git", "-C", str(self.root), "-c", "user.name=test", "-c",
@@ -242,22 +282,57 @@ class ReceiverTests(unittest.TestCase):
         subprocess.run(["git", "clone", "-q", str(self.root), str(checkout)], check=True)
         output = Path(self.temporary.name) / "out"
         output.mkdir()
-        candidate = payload(workload=NEW_ID, sha256=t.sha256(NEW_CANDIDATE),
-                            path=f"candidates/{t.sha256(NEW_CANDIDATE)}.toml")
+        candidate = payload(workload=workload, sha256=t.sha256(raw), path=f"candidates/{t.sha256(raw)}.toml")
         env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_SHA": "a" * 40,
-               "GITHUB_EVENT_PATH": str(self.event(workload=NEW_ID, sha256=candidate["sha256"],
+               "GITHUB_EVENT_PATH": str(self.event(workload=workload, sha256=candidate["sha256"],
                                                         path=candidate["path"])), "RELEASE_TOKEN": "release"}
         with patch.dict(os.environ, env, clear=True), patch.object(receive, "OUTPUT", output):
-            receive.import_candidate(self.root, candidate, NEW_CANDIDATE)
+            receive.import_candidate(self.root, candidate, raw)
+            if widen is not None:
+                widen(self.root)
             receive.prepared_change(self.root, candidate, env["GITHUB_REPOSITORY"], "v1.0.1", "import candidate")
-            with patch.object(receive, "ROOT", checkout):
-                receive.apply_prepared()
-                with patch.object(receive, "publish") as publish:
-                    receive.publish_prepared()
+        return SimpleNamespace(checkout=checkout, output=output, env=env, candidate=candidate)
+
+    def test_prepared_patch_applies_to_fresh_checkout_before_write_token(self):
+        prepared = self.prepare_in_clone()
+        with patch.dict(os.environ, prepared.env, clear=True), patch.object(receive, "OUTPUT", prepared.output), \
+                patch.object(receive, "ROOT", prepared.checkout):
+            receive.apply_prepared()
+            with patch.object(receive, "publish") as publish:
+                receive.publish_prepared()
+        checkout, candidate = prepared.checkout, prepared.candidate
         self.assertEqual(t.sha256((checkout / "init-data" / (candidate["sha256"] + ".toml")).read_bytes()),
                          candidate["sha256"])
         self.assertEqual(t.validate(checkout)["profiles"][-1]["id"], NEW_ID)
         self.assertEqual(publish.call_args.args[1:4], ("prem-research/trustbase", "release", "v1.0.1"))
+
+    def test_prepared_replacement_applies_with_the_previous_definition_kept(self):
+        prepared = self.prepare_in_clone(workload=QWEN_ID, raw=CANDIDATE)
+        with patch.dict(os.environ, prepared.env, clear=True), patch.object(receive, "OUTPUT", prepared.output), \
+                patch.object(receive, "ROOT", prepared.checkout):
+            receive.apply_prepared()
+        profile = t.validate(prepared.checkout)["profiles"][0]
+        self.assertEqual(profile["initdata"], f"init-data/{t.sha256(CANDIDATE)}.toml")
+        self.assertEqual(profile["previous"]["initdata"], QWEN_PATH)
+        self.assertTrue((prepared.checkout / QWEN_PATH).exists())
+
+    def test_prepared_patch_may_not_change_other_workloads(self):
+        def widen(root):
+            manifest = yaml.safe_load((root / "measurements.yaml").read_text())
+            next(p for p in manifest["profiles"] if p["id"] == QWEN_ID)["podvm"]["version"] = "0.3.19"
+            (root / "measurements.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
+        prepared = self.prepare_in_clone(widen)
+        with patch.dict(os.environ, prepared.env, clear=True), patch.object(receive, "OUTPUT", prepared.output), \
+                patch.object(receive, "ROOT", prepared.checkout):
+            with self.assertRaisesRegex(t.Error, "workloads other than the dispatched one"):
+                receive.apply_prepared()
+
+    def test_prepared_patch_may_not_touch_other_files(self):
+        prepared = self.prepare_in_clone(lambda root: (root / "init-data" / "notes.txt").write_text("x\n"))
+        with patch.dict(os.environ, prepared.env, clear=True), patch.object(receive, "OUTPUT", prepared.output), \
+                patch.object(receive, "ROOT", prepared.checkout):
+            with self.assertRaisesRegex(t.Error, r"outside the candidate import: \['init-data/notes.txt'\]"):
+                receive.apply_prepared()
 
     def test_main_already_imported_is_a_noop(self):
         committed = (t.ROOT / QWEN_PATH).read_bytes()
@@ -281,9 +356,12 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual([c[c.index("-c") - 1] if False else c[-3:] for c in commands][-1],
                          ["https://github.com/prem-research/trustbase", "HEAD:refs/heads/main", "refs/tags/v1.0.1"])
         self.assertIn("--atomic", commands[-1])
-        self.assertTrue(all("secret" not in part for c in commands for part in c if part.startswith("https://")))
-        self.assertTrue(any(part.startswith("http.https://github.com/.extraheader=AUTHORIZATION: basic")
-                            for part in commands[-1]))
+        self.assertTrue(all("secret" not in part for c in commands for part in c))
+        push_env = run.call_args_list[-1].kwargs["env"]
+        self.assertEqual(push_env["GIT_CONFIG_COUNT"], "1")
+        self.assertEqual(push_env["GIT_CONFIG_KEY_0"], "http.https://github.com/.extraheader")
+        self.assertTrue(push_env["GIT_CONFIG_VALUE_0"].startswith("AUTHORIZATION: basic "))
+        self.assertTrue(all("env" not in call.kwargs for call in run.call_args_list[:-1]))
 
 
 if __name__ == "__main__":

@@ -45,7 +45,7 @@ jobs:
           cache: pip
       - name: Install Python and GitHub CLI dependencies
         run: |
-          python -m pip install -r requirements.txt
+          python -m pip install --require-hashes -r requirements.txt
           bash .github/scripts/install-gh.sh
       - name: Validate authoring inputs and run offline tests
         run: make validate test
@@ -129,7 +129,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install Python dependencies
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install --require-hashes -r requirements.txt
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: trustbase-prepared-change

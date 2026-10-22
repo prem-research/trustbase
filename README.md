@@ -87,6 +87,18 @@ dots, underscores, or hyphens (maximum 64 characters). Every TOML beneath
 TOML bytes; symlinks and paths outside that directory are rejected. No registered
 digest may appear in `revoked.yaml`.
 
+During a rollout a profile may also carry the definition it replaced:
+
+~~~yaml
+    previous:
+      initdata: init-data/<sha256-of-the-replaced-file>.toml
+      not_after: "2026-10-22T12:00:00Z"
+~~~
+
+The previous TOML is validated exactly like the current one, must carry the same
+`[data].id`, and stays acceptable to relying parties only until `not_after`, an
+absolute UTC timestamp committed here so that releases remain reproducible.
+
 Commit complete policies and other payloads, such as `aa.toml`, `cdh.toml`, or
 `model-mounts.json`, directly into `[data]` as strings. Trustbase measures these
 definitions; it does not run genpolicy or resolve model content.
@@ -134,14 +146,24 @@ at exactly that commit, and requires the
 bytes to hash to the dispatched SHA-256. It checks that `[data].id` matches the
 dispatched workload, then imports the TOML and creates or updates its
 `measurements.yaml` registration. An update may also change the workload's PodVM
-selection within the reviewed floor. The receiver removes a superseded TOML and
-runs the admission gate. Revoked digests are refused before import; a candidate
+selection within the reviewed floor. The receiver keeps a superseded TOML as the
+workload's `previous` with `not_after` set to the import time plus the reviewed
+`floor.rollout_overlap_seconds`, deletes the definition that `previous` displaces,
+and runs the admission gate. Revoked digests are refused before import; a candidate
 whose digest and PodVM selection are already registered is acknowledged without
 a second import. A PodVM version change can reuse the same Init-Data bytes; the
 registration and resolved PodVM measurements still change. A new PodVM profile
 or version needs a reviewed floor change.
 New model IDs and model-specific arguments can flow automatically when the
 resulting candidate satisfies the floor and policy checks.
+
+Rolling out a replacement therefore needs no second release: the next catalog
+lists the new definition as `initdata` and the replaced one as
+`previous_initdata` with its deadline. Fleet should merge the candidate, wait
+until the published catalog lists the new digest for the workload, then roll
+the deployment within the window. New pods verify from the start and old pods
+keep verifying until `not_after`. Revoking the previous digest ends the overlap
+early.
 
 The pipeline is the dry run: the prepare job resolves, packages, and verifies the
 would-be release and uploads it with the admission report as a workflow
@@ -199,7 +221,8 @@ python trustbase.py admit <workload-id> --report build/admission.json
 
 `revoked.yaml` is a cumulative list of Init-Data digests that relying parties must
 reject even if an earlier release referenced them. Entries are never removed, a
-revoked digest cannot remain registered, and the receiver refuses to import one.
+revoked digest cannot remain registered as either a current or a `previous`
+definition, and the receiver refuses to import one.
 Quote digests: an all-digit hexadecimal string is otherwise a YAML integer.
 
 ## Exact measurement contract
@@ -246,7 +269,7 @@ admission evaluator. CI installs pinned versions of each.
 ~~~sh
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install -r requirements.txt
+python -m pip install --require-hashes -r requirements.txt
 make validate test
 make evaluator admit
 make conformance
@@ -328,6 +351,9 @@ values a relying party matches against evidence. At `workloads[<id>]`:
 
 - `initdata` records the declared algorithm, full digest, and the derived
   `host_data` and `mr_config_id` registers for the workload.
+- `previous_initdata`, when present, records the same fields for the definition
+  this one replaced, plus `not_after`. A relying party accepts it only while
+  `not_after` is in the future; after that it ignores the block entirely.
 - `releases` is keyed by the exact PodVM tag. Each entry has an `snp` map from
   CPU model to the expected SNP `measurement`, and/or a `tdx` object with
   `mr_td`, `rtmr_0`, `rtmr_1`, and `rtmr_2`.
@@ -349,9 +375,10 @@ links to confirm the chain.
 A relying party verifies the Trustbase release's provenance, selects the
 **intended** workload ID, then selects the release entry and TEE matching the
 evidence and matches every register in that entry. `host_data` and
-`mr_config_id` come from the workload's `initdata` block. The relying party must
-not mix registers from different releases or TEEs, or accept an arbitrary
-workload ID supplied by the prover. The ID is a lookup key; workload enforcement
+`mr_config_id` come from the workload's `initdata` block, or from its
+`previous_initdata` block while that block's `not_after` has not passed. The
+relying party must not mix registers from different releases or TEEs, or accept
+an arbitrary workload ID supplied by the prover. The ID is a lookup key; workload enforcement
 depends on the measured guest consuming and enforcing its Init-Data policy and
 model metadata. Evidence signature, freshness, and platform-policy checks remain
 part of the relying party.
