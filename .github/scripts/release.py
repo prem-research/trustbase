@@ -1,4 +1,4 @@
-"""Tag-only publication; create a draft, then expose it after every upload succeeds."""
+"""Prepare release subjects and Pages; publish tags through a draft release."""
 import os
 from pathlib import Path
 import re
@@ -103,14 +103,43 @@ def previous():
         latest = max(tags, key=lambda value: t.Version(value[1:]))
         t.require(not PREVIOUS.exists(), f"{PREVIOUS} already exists")
         run(["gh", "release", "download", latest, "--repo", repository, "--dir", str(PREVIOUS)])
-        result = t.verify_package(PREVIOUS, require_provenance=True)
-        t.require(result["release"]["version"] == latest, "downloaded release names another version")
+        result = t.previous_release(PREVIOUS)
+        t.require(result["version"] == latest, "downloaded release names another version")
         output.write(f"previous={PREVIOUS}\n")
         print(f"Previous release {latest} verified")
 
 
+def subjects():
+    """Keep URL paths in the statement, even though every Rego has the same basename."""
+    payloads = t.release_payloads(Path("dist"))
+    output = Path("build/provenance-subjects.txt")
+    t.require(not output.exists(), f"{output} already exists")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("".join(f"{t.sha256(raw)}  {name}\n"
+                              for name, raw in sorted(payloads.items())), encoding="utf-8")
+
+
+def pages():
+    """The caller downloads the artifact accepted by the signed publication gate."""
+    dist = Path("dist")
+    payloads = t.release_payloads(dist)
+    bundle = t.source_file(dist, t.BUNDLE_NAME).read_bytes()
+    output = t.fresh_directory(Path("_site"))
+    output.mkdir()
+    for name, raw in payloads.items():
+        if name in ("measurements.json", "policies.json") or name.startswith("/"):
+            t.write_file(output, name.removeprefix("/"), raw)
+    t.write_file(output, t.BUNDLE_NAME, bundle)
+
+
 def main():
     command = sys.argv[1]
+    if command == "subjects":
+        subjects()
+        return
+    if command == "pages":
+        pages()
+        return
     if command == "version":
         release_tag = os.environ.get("RELEASE_TAG", "")
         version = tag() if release_tag else "preview-" + os.environ["GITHUB_SHA"][:12]
@@ -125,9 +154,9 @@ def main():
         return
     t.require(command == "publish", "unknown release command")
     assets = sorted(Path("dist").iterdir())
-    expected = {"measurements.json", t.archive_name({"version": version}), t.BUNDLE_NAME}
+    expected = set(t.release_assets({"version": version})) | {t.BUNDLE_NAME}
     t.require({asset.name for asset in assets} == expected,
-              "release must contain exactly the two payloads and the provenance bundle")
+              "release must contain exactly the three payload assets and the provenance bundle")
     run(["gh", "release", "create", version, "--repo", repository, "--verify-tag",
          "--draft", "--title", version, "--generate-notes", *map(str, assets)])
     run(["gh", "release", "edit", version, "--repo", repository, "--draft=false"])
@@ -136,6 +165,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (t.Error, OSError, KeyError, subprocess.CalledProcessError) as exc:
+    except (t.Error, OSError, KeyError, ValueError, TypeError, t.yaml.YAMLError,
+            t.tarfile.TarError, subprocess.CalledProcessError) as exc:
         print(f"trustbase release: {exc}", file=sys.stderr)
         raise SystemExit(1)

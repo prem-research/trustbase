@@ -151,13 +151,13 @@ jobs:
         run: |
           python trustbase.py verify --dist dist --require-workloads
           python .github/scripts/release.py check
+      - name: Prepare provenance subjects from frozen release inputs
+        run: python .github/scripts/release.py subjects
       - name: Attest release payloads
         id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: |
-            dist/measurements.json
-            dist/*.tar.gz
+          subject-checksums: build/provenance-subjects.txt
       - name: Attach the Sigstore bundle to the release set
         env:
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
@@ -177,7 +177,7 @@ jobs:
           retention-days: 7
 
   pages:
-    name: Deploy measurements to GitHub Pages
+    name: Deploy measurements and policies to GitHub Pages
     if: github.event_name == 'push' && github.ref_type == 'tag'
     needs: publish
     runs-on:
@@ -194,14 +194,27 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Install checkout dependencies
+        run: |
+          elevate=()
+          if (( EUID != 0 )); then elevate=(sudo -n); fi
+          "${elevate[@]}" apt-get update
+          "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates git
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements.txt
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: trustbase-published-assets
           path: dist
-      - name: Prepare measurements and provenance for GitHub Pages
-        run: |
-          mkdir _site
-          cp dist/measurements.json dist/provenance.sigstore.json _site/
+      - name: Prepare measurements, policies, and provenance from published inputs
+        run: python .github/scripts/release.py pages
       - name: Configure GitHub Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - name: Upload GitHub Pages artifact
