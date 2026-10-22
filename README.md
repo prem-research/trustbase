@@ -311,11 +311,17 @@ archive, not uploaded individually. Their provenance subject names match the
 index entries exactly, such as `/tdx/policy.rego`.
 
 The current `verify` command rejects older releases without the policy assets,
-as well as legacy releases with `SHA256SUMS` and per-asset attestations. This also
-applies to predecessor verification: an old-format predecessor blocks the next
-release rather than silently resetting the chain. Historical verification requires
-the verifier for that release format and checking the expected tag, source
-commit, repository, and signer workflow.
+as well as legacy releases with `SHA256SUMS` and per-asset attestations. There is
+one predecessor-only exception for the published `v1.0.0` at source commit
+`d8525fb042f3ad96f3f7bfb481138b3661f282bf`: its catalog and archive SHA-256 digests
+are pinned in `POLICY_TRANSITION_PREDECESSOR`, and its Sigstore bundle must still
+authenticate the exact subjects, tag, source commit, signer workflow, repository
+ID, and signing timestamp. This lets the next release introduce `policies.json`
+without changing `v1.0.0` or resetting the chain. CI's predecessor download,
+`package --previous-dist`, and `verify --previous-dist` use this same exception.
+All newly generated releases require the policy assets. Normal `verify --dist`
+continues to reject `v1.0.0`; other historical verification requires the verifier
+for that release format.
 
 The catalog follows `schemas/measurements.schema.json` and carries only the
 values a relying party matches against evidence. At `workloads[<id>]`:

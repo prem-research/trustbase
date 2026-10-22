@@ -103,8 +103,8 @@ def previous():
         latest = max(tags, key=lambda value: t.Version(value[1:]))
         t.require(not PREVIOUS.exists(), f"{PREVIOUS} already exists")
         run(["gh", "release", "download", latest, "--repo", repository, "--dir", str(PREVIOUS)])
-        result = t.verify_package(PREVIOUS, require_provenance=True)
-        t.require(result["release"]["version"] == latest, "downloaded release names another version")
+        result = t.previous_release(PREVIOUS)
+        t.require(result["version"] == latest, "downloaded release names another version")
         output.write(f"previous={PREVIOUS}\n")
         print(f"Previous release {latest} verified")
 

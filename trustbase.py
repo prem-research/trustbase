@@ -34,6 +34,16 @@ PODVM_WORKFLOW = PODVM_REPO + "/.github/workflows/podvm.yml"
 TRUSTBASE_REPO = "prem-research/trustbase"
 TRUSTBASE_WORKFLOW = TRUSTBASE_REPO + "/.github/workflows/release.yml"
 BUNDLE_NAME = "provenance.sigstore.json"
+# Only this authenticated, pre-policy release may bridge into the policy format.
+# Digests are the immutable v1.0.0 release assets, not hashes supplied by a caller.
+POLICY_TRANSITION_PREDECESSOR = {
+    "version": "v1.0.0",
+    "source_revision": "d8525fb042f3ad96f3f7bfb481138b3661f282bf",
+    "files": {
+        "measurements.json": "c41fa8acd7139e34c31b821deb79dde544b84152f7696f0ea5e53b0ae5107018",
+        "trustbase-inputs-v1.0.0.tar.gz": "f311fe2bf3a8ac689188f974195fbd59b325f457ea7f2fec39baf10d5492d201",
+    },
+}
 KATA_REVISION = "cf82bb35c80320178bf7570252fe75d6fb263209"
 MAX_FILE = 16 * 1024 * 1024
 MAX_ARCHIVE = 128 * 1024 * 1024
@@ -684,7 +694,26 @@ def package(inputs, output, release, previous=None, trusted_root=None, require_w
 def previous_release(dist, trusted_root=None):
     """Read a downloaded release as the predecessor of the one being built."""
     dist = Path(dist)
-    result = verify_package(dist, trusted_root, require_provenance=True)
+    raw = source_file(dist, "measurements.json").read_bytes()
+    transition = POLICY_TRANSITION_PREDECESSOR
+    if sha256(raw) == transition["files"]["measurements.json"]:
+        require({p.name for p in dist.iterdir()} == set(transition["files"]) | {BUNDLE_NAME},
+                "unexpected policy-transition predecessor assets")
+        for name, digest in transition["files"].items():
+            require(hash_file(source_file(dist, name)) == digest,
+                    f"policy-transition predecessor digest mismatch: {name}")
+        result = load_json(raw)
+        check_schema(result, "measurements.schema.json")
+        release = result["release"]
+        require(release["version"] == transition["version"] and
+                release["source_revision"] == transition["source_revision"] and
+                release["source_repository"] == TRUSTBASE_REPO,
+                "unexpected policy-transition predecessor identity")
+        # The exact signed historical bytes are pinned. No old snapshot schemas
+        # or policy-free archives are accepted by the normal package verifier.
+        verify_release_subjects(dist, release, transition["files"], trusted_root)
+    else:
+        result = verify_package(dist, trusted_root, require_provenance=True)
     return {"version": result["release"]["version"],
             "measurements_sha256": hash_file(source_file(dist, "measurements.json")),
             "revoked": result["revoked"]}
@@ -717,17 +746,24 @@ def parse_timestamp(value):
 
 def verify_release_provenance(dist, release, policies, trusted_root=None):
     """Authenticate every release subject; return the signing time."""
-    require(release["source_repository"] == TRUSTBASE_REPO,
-            f"provenance is only verified for {TRUSTBASE_REPO} releases")
-    bundle = source_file(dist, BUNDLE_NAME)
     expected = {name: hash_file(source_file(dist, name))
                 for name in release_assets(release)}
     expected.update({name: sha256(raw) for name, raw in policies.items() if name.startswith("/")})
+    return verify_release_subjects(dist, release, expected, trusted_root)
+
+
+def verify_release_subjects(dist, release, expected, trusted_root=None):
+    """Authenticate the complete expected statement, including archived policies."""
+    require(release["source_repository"] == TRUSTBASE_REPO,
+            f"provenance is only verified for {TRUSTBASE_REPO} releases")
+    bundle = source_file(dist, BUNDLE_NAME)
     repository_id = github_repository_id(TRUSTBASE_REPO)
     timestamps = []
     # All subjects share one statement. Verifying the uploaded assets authenticates
     # that statement; its exact subject set also binds every archived policy byte.
-    for name in release_assets(release):
+    for name in expected:
+        if name.startswith("/"):
+            continue
         for item in verify_attestation(dist / name, bundle, release["version"], release["source_revision"],
                                        trusted_root, repo=TRUSTBASE_REPO, workflow=TRUSTBASE_WORKFLOW):
             verification = item["verificationResult"]

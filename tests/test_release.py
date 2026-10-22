@@ -136,7 +136,7 @@ class ReleaseTests(unittest.TestCase):
                 output.write_text("")
                 listing = self.releases("v1.0.0", "v1.0.10", "v1.0.9", "v2.0.0", "v1.1.0-rc.1", "dev",
                                         draft=("v2.0.0",), prerelease=("v1.0.9",))
-                verified = {"release": {"version": "v1.0.10"}}
+                verified = {"version": "v1.0.10"}
 
                 def download(command):
                     if command[:3] == ["gh", "release", "download"]:
@@ -145,10 +145,10 @@ class ReleaseTests(unittest.TestCase):
                         (previous / t.BUNDLE_NAME).write_text("{}")
                 with patch.object(release, "api", return_value=listing), \
                         patch.object(release, "run", side_effect=download) as run, \
-                        patch.object(t, "verify_package", return_value=verified) as verify:
+                        patch.object(t, "previous_release", return_value=verified) as verify:
                     release.previous()
                 self.assertEqual(run.call_args_list[0].args[0][:4], ["gh", "release", "download", "v1.0.10"])
-                self.assertEqual(verify.call_args.kwargs, {"require_provenance": True})
+                verify.assert_called_once_with(previous)
                 self.assertEqual(output.read_text(), f"previous={previous}\n")
 
     def test_previous_legacy_release_is_rejected(self):
