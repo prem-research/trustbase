@@ -65,14 +65,16 @@ def check(version):
             assert set(entry["snp"]) == set(selected["sev"])
             for cpu, measurement in entry["snp"].items():
                 assert measurement == selected["sev"][cpu]["measurement"]
-            if "tdx" in selected:
-                assert entry["tdx"] == {key: selected["tdx"]["measurement"][key]
-                                        for key in entry["tdx"]}
+            if t.tdx_records(selected):
+                assert entry["tdx"] == {
+                    processor: {key: record["measurement"][key]
+                                for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}
+                    for processor, record in t.tdx_records(selected).items()}
             else:
                 assert "tdx" not in entry
             path = authoring / next(p["initdata"] for p in manifest["profiles"] if p["id"] == ident)
             assert workload["initdata"]["host_data"] == t.initdata(path.read_bytes(), ident)["host_data"]
-            count += len(entry["snp"]) + ("tdx" in entry)
+            count += len(entry["snp"]) + len(entry.get("tdx", {}))
         assert variants == {"cpu", "nvidia"}
         print(f"Live integration passed: PodVM {tag}, CPU + NVIDIA, "
               f"{count} reference measurements, verified attestations, reproducible package.")

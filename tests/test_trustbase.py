@@ -34,6 +34,18 @@ def upstream(tag="v0.3.13"):
     return doc
 
 
+def by_processor(doc):
+    """Recast a fixture in the post-v0.3.18 shape."""
+    def records(record, names):
+        return {name: {"configuration": {**record["configuration"], "smbios_processor_id": f"{i:016x}"},
+                       "measurement": {key: f"{i:x}" * 96 for key in record["measurement"]}}
+                for i, name in enumerate(names, 1)}
+    cpu = doc["profiles"]["2vcpu-8g"]
+    doc["profiles"]["h100-pcie-1-96g"]["tdx"] = records(cpu["tdx"], ["granite-rapids-a06d1"])
+    cpu["tdx"] = records(cpu["tdx"], ["emerald-rapids-c06f2", "granite-rapids-a06d1"])
+    return doc
+
+
 def release(tag, draft=False, prerelease=False):
     return {
         "tag_name": tag, "draft": draft, "prerelease": prerelease,
@@ -183,6 +195,137 @@ class PolicyTransitionTests(Workspace):
         (self.dist / t.BUNDLE_NAME).unlink()
         with self.assertRaises(t.Error):
             t.previous_release(self.dist)
+
+
+class HistoricalReleaseTests(Workspace):
+    def setUp(self):
+        super().setUp()
+        self.releases = {}
+        expected = {
+            "v1.1.1": {
+                "measurements.json": "70faf3d205305dd7fe1a6e4dcee60c2183c40064ad4f002282a59155f37974aa",
+                "trustbase-inputs-v1.1.1.tar.gz": "a401b160f3ca16dd066e4115d4229e80d28d7dc78a5491ce529a03cefb06a102",
+            },
+            "v1.1.2": {
+                "measurements.json": "254c6c62b6ced0926cce8fa8d88af77f2b2c94e6856bad41e7287b064ed1ab44",
+                "trustbase-inputs-v1.1.2.tar.gz": "858237d7ff44b65714e7e6f105103ed1c0f9cb32793b68442097027bd96b4c58",
+            },
+        }
+        for version, assets in expected.items():
+            release = self.base / f"published-{version}"
+            shutil.copytree(t.ROOT / "tests/fixtures" / f"trustbase-{version}", release)
+            self.releases[version] = release
+            assets["policies.json"] = "1b37a4694cd3ea6fc70ed8b6a098a971dd33485496cec029b00ce13badcceadc"
+            for name, digest in assets.items():
+                self.assertEqual(t.hash_file(release / name), digest)
+        self.published = self.releases["v1.1.2"]
+
+    def mock_external_verification(self):
+        return patch.object(t, "verify_release_provenance",
+                            return_value=t.datetime.datetime.now(t.datetime.timezone.utc))
+
+    def test_real_published_predecessor_verifies_and_chains_to_new_release(self):
+        # Keep exact signed payload bytes; mock only external signature verification.
+        with self.mock_external_verification(), patch.object(t, "verify_attestation"):
+            verified = t.verify_package(self.published, require_workloads=True)
+            previous = t.previous_release(self.published)
+            inputs = self.root.parent / "successor-inputs"
+            t.resolve(self.root, inputs, self.gh)
+            release = t.release_metadata("v1.1.3", t.TRUSTBASE_REPO, "b" * 40)
+            result = t.package(inputs, self.base / "successor", release, previous)
+            self.assertEqual(t.verify_package(self.base / "successor", previous_dist=self.published),
+                             result)
+        self.assertEqual(verified["release"]["version"], "v1.1.2")
+        self.assertEqual(previous["version"], "v1.1.2")
+        self.assertEqual(previous["measurements_sha256"], t.hash_file(self.published / "measurements.json"))
+        self.assertEqual(result["release"]["previous"], t.previous_link(previous))
+        files = t.load_json((inputs / "resolution.json").read_bytes())["files"]
+        self.assertIn("schemas/vendor/podvm-measurements-processors.schema.json", files)
+        self.assertNotIn("schemas/legacy/measurements-v1.schema.json", files)
+
+    def test_real_published_chain_still_verifies_exactly(self):
+        older = self.releases["v1.1.1"]
+        with self.mock_external_verification() as provenance, patch.object(t, "verify_attestation"):
+            t.verify_package(older, require_workloads=True)
+            previous = t.previous_release(older)
+            result = t.verify_package(self.published, require_workloads=True, previous_dist=older)
+        self.assertEqual(previous["version"], "v1.1.1")
+        self.assertEqual(result["release"]["previous"], t.previous_link(previous))
+        self.assertGreaterEqual(provenance.call_count, 2)
+
+    def test_malformed_outer_workloads_are_controlled_errors(self):
+        catalog = self.published / "measurements.json"
+        raw = catalog.read_bytes()
+        result = t.load_json(raw)
+        for value in ([], "invalid", None, 42):
+            result["workloads"] = value
+            catalog.write_bytes(t.json_bytes(result))
+            with self.subTest(value=value), self.assertRaisesRegex(t.Error, "workloads must be an object"):
+                t.verify_package(self.published)
+        catalog.write_bytes(raw)
+
+    def legacy_snapshot(self):
+        inputs = self.snapshot()
+        schema = (inputs / "schemas/measurements.schema.json")
+        schema.write_bytes((t.ROOT / "schemas/legacy/measurements-v1.schema.json").read_bytes())
+        (inputs / "schemas/vendor/podvm-measurements-processors.schema.json").unlink()
+        self.refresh_inventory(inputs)
+        return inputs
+
+    def test_legacy_flat_tdx_reference_reproduces_exactly(self):
+        inputs = self.legacy_snapshot()
+        selected = upstream()["profiles"]["2vcpu-8g"]["tdx"]["measurement"]
+        with patch.object(t, "verify_attestation"):
+            result = t.package(inputs, self.base / "legacy-dist", RELEASE)
+            self.assertEqual(t.verify_package(self.base / "legacy-dist"), result)
+        entry = result["workloads"]["model-router"]["releases"]["v0.3.13"]
+        self.assertEqual(entry["tdx"], {key: selected[key] for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")})
+        self.assertNotIn("tdx", result["workloads"]["example-model"]["releases"]["v0.3.13"])
+
+    def test_legacy_single_bundle_tdx_reference_reproduces_exactly(self):
+        self.gh = FakeGitHub(("v0.1.6", "v0.3.13"))
+
+        def pin_cpu(manifest):
+            for profile in manifest["profiles"]:
+                if profile["podvm"]["profile"] == "2vcpu-8g":
+                    profile["podvm"]["version"] = "0.1.6"
+        self.change_manifest(pin_cpu)
+        inputs = self.legacy_snapshot()
+        selected = upstream("v0.1.6")["profiles"]["2vcpu-8g"]["tdx"]["measurement"]
+        with patch.object(t, "verify_attestation"):
+            result = t.package(inputs, self.base / "legacy-single-dist", RELEASE)
+            self.assertEqual(t.verify_package(self.base / "legacy-single-dist"), result)
+        entry = result["workloads"]["model-router"]["releases"]["v0.1.6"]
+        self.assertEqual(entry["tdx"], {key: selected[key] for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")})
+
+    def test_legacy_and_processor_formats_cannot_be_mixed(self):
+        for tag in self.gh.docs:
+            self.gh.docs[tag] = by_processor(self.gh.docs[tag])
+        inputs = self.legacy_snapshot()
+        with patch.object(t, "verify_attestation"), self.assertRaisesRegex(
+                t.Error, "legacy snapshots cannot contain processor-keyed"):
+            t.catalog(inputs, RELEASE)
+        schema = inputs / "schemas/vendor/podvm-measurements-processors.schema.json"
+        schema.write_bytes((t.ROOT / "schemas/vendor/podvm-measurements-processors.schema.json").read_bytes())
+        self.refresh_inventory(inputs)
+        with patch.object(t, "verify_attestation"), self.assertRaisesRegex(
+                t.Error, "legacy snapshots cannot contain the processor catalog schema"):
+            t.catalog(inputs, RELEASE)
+
+    def test_historical_schema_compatibility_does_not_weaken_integrity(self):
+        inputs = self.base / "tampered-inputs"
+        t.unpack(self.published / "trustbase-inputs-v1.1.2.tar.gz", inputs)
+        schema = inputs / "schemas/measurements.schema.json"
+        original = schema.read_bytes()
+        schema.write_bytes(b"{}\n")
+        self.refresh_inventory(inputs)
+        with self.assertRaisesRegex(t.Error, "snapshot schema differs"):
+            t.read_snapshot(inputs)
+        schema.write_bytes(original)
+        (inputs / "schemas/admission.schema.json").unlink()
+        self.refresh_inventory(inputs)
+        with self.assertRaisesRegex(t.Error, "missing or escaping.*admission.schema"):
+            t.read_snapshot(inputs)
 
 
 class AuthoringTests(Workspace):
@@ -363,6 +506,13 @@ class ResolutionTests(Workspace):
         self.assertEqual(len(manifest["profiles"]), 2)
         self.assertEqual(len(lock["releases"]), 2)
 
+    def test_current_snapshots_still_require_the_processor_schema(self):
+        inputs = self.snapshot()
+        (inputs / "schemas/vendor/podvm-measurements-processors.schema.json").unlink()
+        self.refresh_inventory(inputs)
+        with self.assertRaisesRegex(t.Error, "schemas/vendor/podvm-measurements-processors.schema.json"):
+            t.read_snapshot(inputs)
+
     def test_missing_asset_and_missing_profile(self):
         self.gh.items[0]["assets"].pop()
         with self.assertRaisesRegex(t.Error, "missing or duplicate"):
@@ -396,6 +546,11 @@ class ResolutionTests(Workspace):
         for flag, value in (("--repo", t.PODVM_REPO), ("--source-ref", "refs/tags/v0.3.13"),
                             ("--source-digest", REVISION), ("--signer-workflow", t.PODVM_WORKFLOW)):
             self.assertEqual(command[command.index(flag) + 1], value)
+
+    def test_invalid_podvm_catalog_roots_are_controlled_errors(self):
+        for doc in ([], "invalid", None, 42):
+            with self.subTest(doc=doc), self.assertRaisesRegex(t.Error, "root must be an object"):
+                t.validate_podvm(doc, "v0.3.13", REVISION)
 
     def test_upstream_contract_and_kata_pin(self):
         t.validate_podvm(upstream(), "v0.3.13", REVISION)
@@ -461,6 +616,35 @@ class PackagingTests(Workspace):
         lookup.start()
         self.addCleanup(lookup.stop)
 
+    def test_tdx_records_keyed_by_processor(self):
+        self.gh = FakeGitHub(("v0.3.13", "v0.3.19"))
+        self.gh.docs["v0.3.19"] = by_processor(self.gh.docs["v0.3.19"])
+        t.validate_podvm(self.gh.docs["v0.3.19"], "v0.3.19", REVISION)
+        self.change_manifest(lambda m: [p["podvm"].update(version=">=0.3.13") for p in m["profiles"]])
+        inputs = self.snapshot()
+        with patch.object(t, "verify_attestation"):
+            result = t.package(inputs, self.base / "processors", RELEASE)
+            self.assertEqual(t.verify_package(self.base / "processors"), result)
+        registers = lambda digit: {key: digit * 96 for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}
+        router = result["workloads"]["model-router"]["releases"]
+        self.assertNotIn("tdx", router["v0.3.13"])
+        self.assertEqual(router["v0.3.19"]["tdx"], {"emerald-rapids-c06f2": registers("1"),
+                                                    "granite-rapids-a06d1": registers("2")})
+        gpu = result["workloads"]["example-model"]["releases"]
+        self.assertNotIn("tdx", gpu["v0.3.13"])
+        self.assertEqual(gpu["v0.3.19"]["tdx"], {"granite-rapids-a06d1": registers("1")})
+        for edit in (
+            lambda d: d["profiles"]["2vcpu-8g"].update(tdx={}),
+            lambda d: d["profiles"]["2vcpu-8g"]["tdx"]["granite-rapids-a06d1"]["configuration"].pop(
+                "smbios_processor_id"),
+            # One catalog cannot mix the two shapes.
+            lambda d: d["profiles"]["h100-pcie-1-96g"].update(tdx=upstream()["profiles"]["2vcpu-8g"]["tdx"]),
+        ):
+            doc = by_processor(upstream("v0.3.19"))
+            edit(doc)
+            with self.subTest(edit=edit), self.assertRaises(t.Error):
+                t.validate_podvm(doc, "v0.3.19", REVISION)
+
     def test_legacy_cpu_and_unified_gpu_can_share_a_release(self):
         self.gh = FakeGitHub(("v0.1.6", "v0.3.13"))
         self.change_manifest(lambda m: m["profiles"][0]["podvm"].update(version="0.1.6"))
@@ -470,11 +654,8 @@ class PackagingTests(Workspace):
             self.assertEqual(t.verify_package(self.base / "mixed"), result)
         router = result["workloads"]["model-router"]["releases"]
         self.assertEqual(set(router), {"v0.1.6"})
-        self.assertEqual(set(router["v0.1.6"]), {"tdx", "snp"})
+        self.assertEqual(set(router["v0.1.6"]), {"snp"})
         selected = upstream("v0.1.6")["profiles"]["2vcpu-8g"]
-        self.assertEqual(router["v0.1.6"]["tdx"],
-                         {key: selected["tdx"]["measurement"][key]
-                          for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")})
         self.assertEqual(router["v0.1.6"]["snp"],
                          {cpu: data["measurement"] for cpu, data in selected["sev"].items()})
         gpu = result["workloads"]["example-model"]["releases"]
@@ -504,7 +685,7 @@ class PackagingTests(Workspace):
         for tag in ("v0.3.13", "v0.3.14"):
             entry = workload["releases"][tag]
             selected = upstream(tag)["profiles"]["2vcpu-8g"]
-            self.assertEqual(set(entry["tdx"]), {"mr_td", "rtmr_0", "rtmr_1", "rtmr_2"})
+            self.assertEqual(set(entry), {"snp"})
             self.assertEqual(set(entry["snp"]), set(selected["sev"]))
             for cpu, measurement in entry["snp"].items():
                 self.assertEqual(measurement, selected["sev"][cpu]["measurement"])
@@ -541,22 +722,22 @@ class PackagingTests(Workspace):
             self.assertEqual(set(entry["snp"]), set(selected["sev"]))
             for cpu, data in selected["sev"].items():
                 self.assertEqual(entry["snp"][cpu], data["measurement"])
-            if "tdx" in selected:
-                self.assertEqual(entry["tdx"],
-                                 {key: selected["tdx"]["measurement"][key]
-                                  for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")})
-            else:
-                self.assertNotIn("tdx", entry)
+            self.assertNotIn("tdx", entry)
 
     def test_catalog_schema_rejects_malformed_measurements(self):
         inputs = self.snapshot()
         with patch.object(t, "verify_attestation"):
             original = t.catalog(inputs, RELEASE)
+        original["workloads"]["model-router"]["releases"]["v0.3.13"]["tdx"] = {
+            "granite-rapids-a06d1": {key: "a" * 96 for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}}
+        t.check_schema(original, "measurements.schema.json")
         for edit in (
-            lambda w: w["releases"]["v0.3.13"]["tdx"].pop("rtmr_1"),
+            lambda w: w["releases"]["v0.3.13"]["tdx"]["granite-rapids-a06d1"].pop("rtmr_1"),
+            lambda w: w["releases"]["v0.3.13"].update(tdx={}),
+            lambda w: w["releases"]["v0.3.13"].update(tdx=w["releases"]["v0.3.13"]["tdx"]["granite-rapids-a06d1"]),
             lambda w: w["releases"]["v0.3.13"].update(snp={}),
             lambda w: w["releases"]["v0.3.13"].update(snp={"NOT-A-CPU": "a" * 96}),
-            lambda w: w["releases"]["v0.3.13"].update(tdx={"mr_td": "bad"}),
+            lambda w: w["releases"]["v0.3.13"].update(tdx={"granite-rapids-a06d1": {"mr_td": "bad"}}),
             lambda w: w["initdata"].pop("host_data"),
             lambda w: w["releases"].update({"not a version": {"snp": {"EPYC": "a" * 96}}}),
         ):
