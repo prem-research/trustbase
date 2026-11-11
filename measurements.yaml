@@ -5,3 +5,8 @@ profiles:
   podvm:
     profile: h100-pcie-1-96g
     version: 0.3.18
+- id: diffusiongemma-26b-a4b-h100-pcie-1-96g
+  initdata: init-data/c5bb3f9da28adad42260b9363f31c325e5f5cd0b67a08d167451ff2c442b5756.toml
+  podvm:
+    profile: h100-pcie-1-96g
+    version: 0.3.18
