@@ -32,6 +32,11 @@ NEW_CANDIDATE = CANDIDATE.replace(f'"id" = "{QWEN_ID}"'.encode(),
                                   f'"id" = "{NEW_ID}"'.encode(), 1)
 
 
+def profile(profiles, ident):
+    """The registered profile for a workload, wherever it sits in the manifest."""
+    return next(p for p in profiles if p["id"] == ident)
+
+
 def payload(**overrides):
     base = {"schema_version": 1, "workload": QWEN_ID, "repository": "prem-research/coco-fleet",
             "commit": "c" * 40, "path": f"candidates/{t.sha256(CANDIDATE)}.toml",
@@ -65,6 +70,7 @@ class ReceiverTests(unittest.TestCase):
         for name in ("measurements.yaml", "revoked.yaml", "admission.yaml"):
             shutil.copyfile(t.ROOT / name, self.root / name)
         shutil.copytree(t.ROOT / "init-data", self.root / "init-data")
+        self.registered = t.validate(self.root)["profiles"]
 
     def event(self, **overrides):
         path = Path(self.temporary.name) / "event.json"
@@ -119,12 +125,15 @@ class ReceiverTests(unittest.TestCase):
         self.assertTrue(receive.import_candidate(self.root, payload(), CANDIDATE))
         manifest = t.validate(self.root)
         target = f"init-data/{t.sha256(CANDIDATE)}.toml"
-        self.assertEqual(manifest["profiles"][0]["initdata"], target)
+        # Every registered workload keeps its id; the imported one moves to the new TOML.
+        self.assertEqual(profile(manifest["profiles"], QWEN_ID)["initdata"], target)
+        self.assertEqual(len(manifest["profiles"]), len(self.registered))
+        self.assertEqual({p["id"] for p in manifest["profiles"]}, {p["id"] for p in self.registered})
         self.assertFalse((self.root / QWEN_PATH).exists())
         self.assertEqual((self.root / target).read_bytes(), CANDIDATE)
         text = (self.root / "measurements.yaml").read_text()
         self.assertIn("version: 0.3.18", text)
-        self.assertEqual(text.count("initdata:"), 1)
+        self.assertEqual(text.count(f"initdata: {target}"), 1)
         self.assertFalse(receive.import_candidate(self.root, payload(), CANDIDATE))
         with self.assertRaisesRegex(t.Error, "do not match the dispatched SHA-256"):
             receive.import_candidate(self.root, payload(), CANDIDATE + b"\n")
@@ -141,11 +150,11 @@ class ReceiverTests(unittest.TestCase):
     def test_import_new_workload_and_update_podvm_selection(self):
         new_payload = payload(workload=NEW_ID, sha256=t.sha256(NEW_CANDIDATE),
                               path=f"candidates/{t.sha256(NEW_CANDIDATE)}.toml")
-        before = t.validate(self.root)["profiles"][0].copy()
+        before = profile(t.validate(self.root)["profiles"], QWEN_ID).copy()
         self.assertTrue(receive.import_candidate(self.root, new_payload, NEW_CANDIDATE))
         profiles = t.validate(self.root)["profiles"]
-        self.assertEqual(profiles[0], before)
-        self.assertEqual(profiles[1], {"id": NEW_ID,
+        self.assertEqual(profile(profiles, QWEN_ID), before)
+        self.assertEqual(profile(profiles, NEW_ID), {"id": NEW_ID,
             "initdata": f"init-data/{t.sha256(NEW_CANDIDATE)}.toml",
             "podvm": new_payload["podvm"]})
         self.assertFalse(receive.import_candidate(self.root, new_payload, NEW_CANDIDATE))
@@ -157,7 +166,7 @@ class ReceiverTests(unittest.TestCase):
             receive.import_candidate(self.root, changed, NEW_CANDIDATE)
         self.allow_selection(updated_selection)
         self.assertTrue(receive.import_candidate(self.root, changed, NEW_CANDIDATE))
-        self.assertEqual(t.validate(self.root)["profiles"][1]["podvm"], updated_selection)
+        self.assertEqual(profile(t.validate(self.root)["profiles"], NEW_ID)["podvm"], updated_selection)
         self.assertFalse(receive.import_candidate(self.root, changed, NEW_CANDIDATE))
 
     def test_release_admission_rejects_registration_outside_podvm_floor(self):
@@ -217,7 +226,8 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual((output / "changes.patch").read_bytes(), b"candidate patch")
         self.assertEqual(t.load_json((output / "prepared.json").read_bytes())["sha256"], t.sha256(CANDIDATE))
         self.assertTrue((output / "admission-report.json").exists())
-        self.assertEqual(t.validate(self.root)["profiles"][0]["initdata"], f"init-data/{t.sha256(CANDIDATE)}.toml")
+        self.assertEqual(profile(t.validate(self.root)["profiles"], QWEN_ID)["initdata"],
+                         f"init-data/{t.sha256(CANDIDATE)}.toml")
 
     def test_denied_candidate_never_prepares_a_publishable_change(self):
         env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_SHA": "a" * 40,
