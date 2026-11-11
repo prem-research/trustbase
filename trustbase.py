@@ -855,6 +855,7 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
     result = load_json(raw_catalog)
     require(isinstance(result, dict), "Trustbase catalog root must be an object")
     require(isinstance(result.get("release"), dict), "Trustbase release metadata must be an object")
+    require(isinstance(result.get("workloads"), dict), "Trustbase workloads must be an object")
     require(not require_workloads or result["workloads"],
             "publication requires at least one production workload")
     release = release_metadata(**{

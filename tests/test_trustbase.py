@@ -253,6 +253,17 @@ class HistoricalReleaseTests(Workspace):
         self.assertEqual(result["release"]["previous"], t.previous_link(previous))
         self.assertGreaterEqual(provenance.call_count, 2)
 
+    def test_malformed_outer_workloads_are_controlled_errors(self):
+        catalog = self.published / "measurements.json"
+        raw = catalog.read_bytes()
+        result = t.load_json(raw)
+        for value in ([], "invalid", None, 42):
+            result["workloads"] = value
+            catalog.write_bytes(t.json_bytes(result))
+            with self.subTest(value=value), self.assertRaisesRegex(t.Error, "workloads must be an object"):
+                t.verify_package(self.published)
+        catalog.write_bytes(raw)
+
     def legacy_snapshot(self):
         inputs = self.snapshot()
         schema = (inputs / "schemas/measurements.schema.json")
