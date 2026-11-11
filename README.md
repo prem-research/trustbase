@@ -112,9 +112,8 @@ and NVIDIA bundles. Trustbase supports this unified format and retains support
 for older single-bundle CPU catalogs. The selected profile determines the bundle;
 no separate variant field is needed. CPU profiles have `tdx` and `sev` records.
 GPU profiles have a `gpu` block and `sev` records and select the NVIDIA bundle.
-GPU profiles publish SNP references only. Trustbase preserves the declared GPU
-family, platform, GPU count, and NVSwitch count; these labels do not constitute
-GPU hardware attestation.
+PodVM releases after v0.3.18 key every profile's `tdx` records by host processor,
+because the processor's SMBIOS ID is measured into RTMR0.
 
 New PodVM releases never change an existing Trustbase release. Publish another
 Trustbase tag to resolve again. Removing a workload or narrowing its range takes
@@ -329,8 +328,10 @@ values a relying party matches against evidence. At `workloads[<id>]`:
 - `initdata` records the declared algorithm, full digest, and the derived
   `host_data` and `mr_config_id` registers for the workload.
 - `releases` is keyed by the exact PodVM tag. Each entry has an `snp` map from
-  CPU model to the expected SNP `measurement`, and/or a `tdx` object with
-  `mr_td`, `rtmr_0`, `rtmr_1`, and `rtmr_2`.
+  CPU model to the expected SNP `measurement`, and/or a `tdx` map from host
+  processor to `mr_td`, `rtmr_0`, `rtmr_1`, and `rtmr_2`. Evidence must match
+  one processor's record in full. PodVM releases up to v0.3.18 name no
+  processor, so they have no `tdx` reference.
 
 Launch configuration, bundle digests, source commits, and upstream catalog
 digests are provenance rather than attestation inputs. They remain available in

@@ -39,13 +39,16 @@ allow if {
 	bytes_within_mask(xfam_allowed, input.claims.xfam)
 }
 
+# References are keyed by host processor; one record must match in full.
 measurements_match if {
-	hex_equal(reference.mr_td, input.claims.mrtd)
+	is_object(reference)
 	is_array(input.claims.rtmr)
 	count(input.claims.rtmr) == 4
-	hex_equal(reference.rtmr_0, input.claims.rtmr[0])
-	hex_equal(reference.rtmr_1, input.claims.rtmr[1])
-	hex_equal(reference.rtmr_2, input.claims.rtmr[2])
+	some processor, expected in reference
+	hex_equal(expected.mr_td, input.claims.mrtd)
+	hex_equal(expected.rtmr_0, input.claims.rtmr[0])
+	hex_equal(expected.rtmr_1, input.claims.rtmr[1])
+	hex_equal(expected.rtmr_2, input.claims.rtmr[2])
 
 	# Bind the selected workload's init-data to the measured configuration.
 	hex_equal(workload.initdata.mr_config_id, input.claims.mrconfigid)

@@ -396,9 +396,25 @@ def podvm_variants(doc):
             for variant, artifact in doc["artifacts"].items()}
 
 
+def tdx_records(profile):
+    """A profile's TDX records by host processor; a record that names none is not a reference."""
+    record = profile.get("tdx", {})
+    return {} if "measurement" in record else record
+
+
+def podvm_schema(doc):
+    if "artifact" in doc:
+        return "vendor/podvm-measurements.schema.json"
+    profiles = doc.get("profiles")
+    records = [p["tdx"] for p in profiles.values()
+               if isinstance(p, dict) and isinstance(p.get("tdx"), dict)] if isinstance(profiles, dict) else []
+    # One TDX record per profile up to v0.3.18; keyed by processor after.
+    return ("vendor/podvm-measurements-variants.schema.json" if any("measurement" in r for r in records)
+            else "vendor/podvm-measurements-processors.schema.json")
+
+
 def validate_podvm(doc, tag, revision):
-    check_schema(doc, "vendor/podvm-measurements.schema.json" if "artifact" in doc
-                 else "vendor/podvm-measurements-variants.schema.json")
+    check_schema(doc, podvm_schema(doc))
     require(doc["release"] == {
         "version": tag, "source_repository": PODVM_REPO, "source_revision": revision,
     }, f"{tag}: PodVM release identity does not match the resolved tag")
@@ -603,10 +619,10 @@ def catalog(inputs, release, previous=None, trusted_root=None):
                           key=lambda tag: (stable_version(tag).precedence_key, tag)):
             selected = documents[tag]["profiles"][profile["podvm"]["profile"]]
             entry = releases.setdefault(tag, {})
-            if "tdx" in selected:
-                measurement = selected["tdx"]["measurement"]
-                entry["tdx"] = {key: measurement[key]
-                                for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}
+            if tdx_records(selected):
+                entry["tdx"] = {processor: {key: record["measurement"][key]
+                                            for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}
+                                for processor, record in sorted(tdx_records(selected).items())}
             if selected["sev"]:
                 entry["snp"] = {cpu: data["measurement"]
                                 for cpu, data in sorted(selected["sev"].items())}

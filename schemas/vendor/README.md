@@ -9,6 +9,10 @@ https://github.com/prem-research/podvm/blob/b57d5e92583388169743bc0084673f0249d6
 `98fb81edf7284bc44f503ce21347f440acb0e3a6` (release v0.3.13):
 https://github.com/prem-research/podvm/blob/98fb81edf7284bc44f503ce21347f440acb0e3a6/schemas/measurements.schema.json
 
+`podvm-measurements-processors.schema.json` is copied byte-for-byte from commit
+`b7213c2` on the `feat/publish-gpu-tdx` branch (unreleased; re-pin to the tagged
+commit). It keys TDX records by host processor and allows them on GPU profiles.
+
 `podvm-model-mounts.schema.json` is copied byte-for-byte from commit
 `98fb81edf7284bc44f503ce21347f440acb0e3a6` (release v0.3.13):
 https://github.com/prem-research/podvm/blob/98fb81edf7284bc44f503ce21347f440acb0e3a6/schemas/model-mounts.schema.json

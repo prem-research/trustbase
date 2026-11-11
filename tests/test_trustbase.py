@@ -34,6 +34,18 @@ def upstream(tag="v0.3.13"):
     return doc
 
 
+def by_processor(doc):
+    """Recast a fixture in the post-v0.3.18 shape."""
+    def records(record, names):
+        return {name: {"configuration": {**record["configuration"], "smbios_processor_id": f"{i:016x}"},
+                       "measurement": {key: f"{i:x}" * 96 for key in record["measurement"]}}
+                for i, name in enumerate(names, 1)}
+    cpu = doc["profiles"]["2vcpu-8g"]
+    doc["profiles"]["h100-pcie-1-96g"]["tdx"] = records(cpu["tdx"], ["granite-rapids-a06d1"])
+    cpu["tdx"] = records(cpu["tdx"], ["emerald-rapids-c06f2", "granite-rapids-a06d1"])
+    return doc
+
+
 def release(tag, draft=False, prerelease=False):
     return {
         "tag_name": tag, "draft": draft, "prerelease": prerelease,
@@ -461,6 +473,35 @@ class PackagingTests(Workspace):
         lookup.start()
         self.addCleanup(lookup.stop)
 
+    def test_tdx_records_keyed_by_processor(self):
+        self.gh = FakeGitHub(("v0.3.13", "v0.3.19"))
+        self.gh.docs["v0.3.19"] = by_processor(self.gh.docs["v0.3.19"])
+        t.validate_podvm(self.gh.docs["v0.3.19"], "v0.3.19", REVISION)
+        self.change_manifest(lambda m: [p["podvm"].update(version=">=0.3.13") for p in m["profiles"]])
+        inputs = self.snapshot()
+        with patch.object(t, "verify_attestation"):
+            result = t.package(inputs, self.base / "processors", RELEASE)
+            self.assertEqual(t.verify_package(self.base / "processors"), result)
+        registers = lambda digit: {key: digit * 96 for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}
+        router = result["workloads"]["model-router"]["releases"]
+        self.assertNotIn("tdx", router["v0.3.13"])
+        self.assertEqual(router["v0.3.19"]["tdx"], {"emerald-rapids-c06f2": registers("1"),
+                                                    "granite-rapids-a06d1": registers("2")})
+        gpu = result["workloads"]["example-model"]["releases"]
+        self.assertNotIn("tdx", gpu["v0.3.13"])
+        self.assertEqual(gpu["v0.3.19"]["tdx"], {"granite-rapids-a06d1": registers("1")})
+        for edit in (
+            lambda d: d["profiles"]["2vcpu-8g"].update(tdx={}),
+            lambda d: d["profiles"]["2vcpu-8g"]["tdx"]["granite-rapids-a06d1"]["configuration"].pop(
+                "smbios_processor_id"),
+            # One catalog cannot mix the two shapes.
+            lambda d: d["profiles"]["h100-pcie-1-96g"].update(tdx=upstream()["profiles"]["2vcpu-8g"]["tdx"]),
+        ):
+            doc = by_processor(upstream("v0.3.19"))
+            edit(doc)
+            with self.subTest(edit=edit), self.assertRaises(t.Error):
+                t.validate_podvm(doc, "v0.3.19", REVISION)
+
     def test_legacy_cpu_and_unified_gpu_can_share_a_release(self):
         self.gh = FakeGitHub(("v0.1.6", "v0.3.13"))
         self.change_manifest(lambda m: m["profiles"][0]["podvm"].update(version="0.1.6"))
@@ -470,11 +511,8 @@ class PackagingTests(Workspace):
             self.assertEqual(t.verify_package(self.base / "mixed"), result)
         router = result["workloads"]["model-router"]["releases"]
         self.assertEqual(set(router), {"v0.1.6"})
-        self.assertEqual(set(router["v0.1.6"]), {"tdx", "snp"})
+        self.assertEqual(set(router["v0.1.6"]), {"snp"})
         selected = upstream("v0.1.6")["profiles"]["2vcpu-8g"]
-        self.assertEqual(router["v0.1.6"]["tdx"],
-                         {key: selected["tdx"]["measurement"][key]
-                          for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")})
         self.assertEqual(router["v0.1.6"]["snp"],
                          {cpu: data["measurement"] for cpu, data in selected["sev"].items()})
         gpu = result["workloads"]["example-model"]["releases"]
@@ -504,7 +542,7 @@ class PackagingTests(Workspace):
         for tag in ("v0.3.13", "v0.3.14"):
             entry = workload["releases"][tag]
             selected = upstream(tag)["profiles"]["2vcpu-8g"]
-            self.assertEqual(set(entry["tdx"]), {"mr_td", "rtmr_0", "rtmr_1", "rtmr_2"})
+            self.assertEqual(set(entry), {"snp"})
             self.assertEqual(set(entry["snp"]), set(selected["sev"]))
             for cpu, measurement in entry["snp"].items():
                 self.assertEqual(measurement, selected["sev"][cpu]["measurement"])
@@ -541,22 +579,22 @@ class PackagingTests(Workspace):
             self.assertEqual(set(entry["snp"]), set(selected["sev"]))
             for cpu, data in selected["sev"].items():
                 self.assertEqual(entry["snp"][cpu], data["measurement"])
-            if "tdx" in selected:
-                self.assertEqual(entry["tdx"],
-                                 {key: selected["tdx"]["measurement"][key]
-                                  for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")})
-            else:
-                self.assertNotIn("tdx", entry)
+            self.assertNotIn("tdx", entry)
 
     def test_catalog_schema_rejects_malformed_measurements(self):
         inputs = self.snapshot()
         with patch.object(t, "verify_attestation"):
             original = t.catalog(inputs, RELEASE)
+        original["workloads"]["model-router"]["releases"]["v0.3.13"]["tdx"] = {
+            "granite-rapids-a06d1": {key: "a" * 96 for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}}
+        t.check_schema(original, "measurements.schema.json")
         for edit in (
-            lambda w: w["releases"]["v0.3.13"]["tdx"].pop("rtmr_1"),
+            lambda w: w["releases"]["v0.3.13"]["tdx"]["granite-rapids-a06d1"].pop("rtmr_1"),
+            lambda w: w["releases"]["v0.3.13"].update(tdx={}),
+            lambda w: w["releases"]["v0.3.13"].update(tdx=w["releases"]["v0.3.13"]["tdx"]["granite-rapids-a06d1"]),
             lambda w: w["releases"]["v0.3.13"].update(snp={}),
             lambda w: w["releases"]["v0.3.13"].update(snp={"NOT-A-CPU": "a" * 96}),
-            lambda w: w["releases"]["v0.3.13"].update(tdx={"mr_td": "bad"}),
+            lambda w: w["releases"]["v0.3.13"].update(tdx={"granite-rapids-a06d1": {"mr_td": "bad"}}),
             lambda w: w["initdata"].pop("host_data"),
             lambda w: w["releases"].update({"not a version": {"snp": {"EPYC": "a" * 96}}}),
         ):
