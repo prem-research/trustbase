@@ -319,8 +319,14 @@ ID, and signing timestamp. This lets the next release introduce `policies.json`
 without changing `v1.0.0` or resetting the chain. CI's predecessor download,
 `package --previous-dist`, and `verify --previous-dist` use this same exception.
 All newly generated releases require the policy assets. Normal `verify --dist`
-continues to reject `v1.0.0`; other historical verification requires the verifier
-for that release format.
+continues to reject `v1.0.0`. Other historical policy-bearing releases remain
+verifiable when their frozen schema bytes exactly match a trusted historical
+profile. That profile also preserves the original flat TDX reference projection
+when reproducing a legacy catalog, and requires the original PodVM schema shape.
+It is selected from the authenticated input archive, not from a release tag,
+self-declared schema URL, or whichever schema happens to accept a document.
+Historical profiles never enter new snapshots; a legacy predecessor does not
+downgrade a newly generated successor.
 
 The catalog follows `schemas/measurements.schema.json` and carries only the
 values a relying party matches against evidence. At `workloads[<id>]`:
@@ -330,8 +336,10 @@ values a relying party matches against evidence. At `workloads[<id>]`:
 - `releases` is keyed by the exact PodVM tag. Each entry has an `snp` map from
   CPU model to the expected SNP `measurement`, and/or a `tdx` map from host
   processor to `mr_td`, `rtmr_0`, `rtmr_1`, and `rtmr_2`. Evidence must match
-  one processor's record in full. PodVM releases up to v0.3.18 name no
-  processor, so they have no `tdx` reference.
+  one processor's record in full. In newly generated catalogs, PodVM releases
+  up to v0.3.18 name no processor, so they have no `tdx` reference. Historical
+  catalogs retain their original flat references under the compatibility
+  profile described above.
 
 Launch configuration, bundle digests, source commits, and upstream catalog
 digests are provenance rather than attestation inputs. They remain available in

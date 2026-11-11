@@ -1,0 +1,36 @@
+{
+  "release": {
+    "previous": {
+      "measurements_sha256": "c41fa8acd7139e34c31b821deb79dde544b84152f7696f0ea5e53b0ae5107018",
+      "version": "v1.0.0"
+    },
+    "source_repository": "prem-research/trustbase",
+    "source_revision": "d0babdd0ee102acc03dc698b57b338091747c9be",
+    "version": "v1.1.1"
+  },
+  "revoked": [],
+  "schema": "https://raw.githubusercontent.com/prem-research/trustbase/d0babdd0ee102acc03dc698b57b338091747c9be/schemas/measurements.schema.json",
+  "schema_version": 1,
+  "workloads": {
+    "qwen38-27b-h100-pcie-1-96g": {
+      "initdata": {
+        "algorithm": "sha384",
+        "digest": "9f541a6c44cac56c32db3fea1930b87b034babe863441e58825abb8eb0ddf71bfc90504e2b3fc0dfd260b0ac2838d64d",
+        "host_data": "9f541a6c44cac56c32db3fea1930b87b034babe863441e58825abb8eb0ddf71b",
+        "mr_config_id": "9f541a6c44cac56c32db3fea1930b87b034babe863441e58825abb8eb0ddf71bfc90504e2b3fc0dfd260b0ac2838d64d",
+        "path": "init-data/c1db10c3e8b3887a58f8052d4fd6f5bf327a23e45b4e2ec158ba91639412e33c.toml",
+        "sha256": "c1db10c3e8b3887a58f8052d4fd6f5bf327a23e45b4e2ec158ba91639412e33c"
+      },
+      "releases": {
+        "v0.3.18": {
+          "snp": {
+            "EPYC-Genoa-v1": "a722f5d5d8e7966b2849fac44905f93c7138edee0bb57043f86bff2e169fb3d6cc58faf24e0f15a7623c48da90f24bad",
+            "EPYC-Milan-v2": "4821b5cd0bfcb92b666c28e2094fe8059e4f05ac73c8a1e83c3123669e06b4e76b1e3c492b13065086f65a04c9170ae3",
+            "EPYC-Turin": "d6dddb70c032f3fdc9fcd35128f6b52c24fdca41c69fe25458099eb6fd9dd1c1af6282624539aa1cab7d06ed44d2c3d8",
+            "EPYC-v4": "e8333ab2e12cb17c4fc5cc6a55653f9b279524c3f916f151a9e7b72d800cfacf98db11eab83b515862d4d3e8d35ef33c"
+          }
+        }
+      }
+    }
+  }
+}

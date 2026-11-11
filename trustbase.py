@@ -402,19 +402,23 @@ def tdx_records(profile):
     return {} if "measurement" in record else record
 
 
-def podvm_schema(doc):
+def podvm_schema(doc, legacy_tdx=False):
+    require(isinstance(doc, dict), "PodVM catalog root must be an object")
     if "artifact" in doc:
         return "vendor/podvm-measurements.schema.json"
     profiles = doc.get("profiles")
     records = [p["tdx"] for p in profiles.values()
                if isinstance(p, dict) and isinstance(p.get("tdx"), dict)] if isinstance(profiles, dict) else []
     # One TDX record per profile up to v0.3.18; keyed by processor after.
-    return ("vendor/podvm-measurements-variants.schema.json" if any("measurement" in r for r in records)
+    name = ("vendor/podvm-measurements-variants.schema.json" if any("measurement" in r for r in records)
             else "vendor/podvm-measurements-processors.schema.json")
+    require(not legacy_tdx or name != "vendor/podvm-measurements-processors.schema.json",
+            "legacy snapshots cannot contain processor-keyed PodVM TDX records")
+    return name
 
 
-def validate_podvm(doc, tag, revision):
-    check_schema(doc, podvm_schema(doc))
+def validate_podvm(doc, tag, revision, legacy_tdx=False):
+    check_schema(doc, podvm_schema(doc, legacy_tdx))
     require(doc["release"] == {
         "version": tag, "source_repository": PODVM_REPO, "source_revision": revision,
     }, f"{tag}: PodVM release identity does not match the resolved tag")
@@ -442,14 +446,14 @@ def podvm_variant(profile):
     return "nvidia" if "gpu" in profile else "cpu"
 
 
-def verify_podvm(directory, tag, revision, trusted_root=None):
+def verify_podvm(directory, tag, revision, trusted_root=None, legacy_tdx=False):
     measurement = source_file(directory, "measurements.json")
     sums_file = source_file(directory, "SHA256SUMS")
     for asset in (measurement, sums_file):
         verify_attestation(asset, source_file(directory, asset.name + ".sigstore.jsonl"),
                            tag, revision, trusted_root)
     doc = load_json(measurement.read_bytes())
-    validate_podvm(doc, tag, revision)
+    validate_podvm(doc, tag, revision, legacy_tdx)
     sums = parse_sums(sums_file.read_bytes())
     require(sums.get("measurements.json") == hash_file(measurement),
             f"{tag}: measurements.json checksum mismatch")
@@ -475,6 +479,23 @@ def inventory(root):
             require(path.stat().st_size <= MAX_FILE, f"snapshot file too large: {path}")
             result[path.relative_to(root).as_posix()] = hash_file(path)
     return result
+
+
+def snapshot_schema_names():
+    """Active schemas copied into new snapshots; legacy rules are verifier-only."""
+    return sorted(path.relative_to(ROOT).as_posix()
+                  for path in (ROOT / "schemas").rglob("*.json")
+                  if "legacy" not in path.relative_to(ROOT / "schemas").parts)
+
+
+def snapshot_catalog_schema(inputs):
+    """Select only schema versions whose trusted bytes match the frozen archive."""
+    raw = source_file(inputs, "schemas/measurements.schema.json").read_bytes()
+    for name in ("measurements.schema.json", "legacy/measurements-v1.schema.json"):
+        if raw == source_file(ROOT / "schemas", name).read_bytes():
+            return name
+    require(False, "snapshot schema differs from a supported Trustbase version: "
+                   "schemas/measurements.schema.json")
 
 
 def fresh_directory(path):
@@ -503,8 +524,8 @@ def resolve(root, output, github=None, trusted_root=None):
         for profile in manifest["profiles"]:
             write_file(staging, profile["initdata"],
                        source_file(root, profile["initdata"]).read_bytes())
-        for schema in sorted((ROOT / "schemas").rglob("*.json")):
-            write_file(staging, schema.relative_to(ROOT).as_posix(), schema.read_bytes())
+        for name in snapshot_schema_names():
+            write_file(staging, name, source_file(ROOT, name).read_bytes())
         locked = {}
         tags = sorted({tag for values in selections.values() for tag in values},
                       key=lambda tag: (stable_version(tag).precedence_key, tag))
@@ -547,9 +568,18 @@ def read_snapshot(inputs, trusted_root=None):
     require(lock["repository"] == PODVM_REPO, "unexpected PodVM repository in resolution")
     require(inventory(inputs) == lock["files"], "frozen input inventory/checksum mismatch")
     # Never let schemas supplied by an input archive redefine our validation rules.
-    for path in (ROOT / "schemas").rglob("*.json"):
-        name = path.relative_to(ROOT).as_posix()
-        require(source_file(inputs, name).read_bytes() == path.read_bytes(),
+    # Historical archives select trusted legacy rules only by exact bytes. They
+    # retain their original schema set and cannot add the new processor schema.
+    catalog_schema = snapshot_catalog_schema(inputs)
+    legacy_tdx = catalog_schema == "legacy/measurements-v1.schema.json"
+    for name in snapshot_schema_names():
+        if name == "schemas/measurements.schema.json":
+            continue
+        if legacy_tdx and name == "schemas/vendor/podvm-measurements-processors.schema.json":
+            require(not (inputs / name).exists(),
+                    "legacy snapshots cannot contain the processor catalog schema")
+            continue
+        require(source_file(inputs, name).read_bytes() == source_file(ROOT, name).read_bytes(),
                 f"snapshot schema differs from this Trustbase version: {name}")
     manifest = validate(inputs)
     policy_payloads(inputs)
@@ -563,7 +593,7 @@ def read_snapshot(inputs, trusted_root=None):
         directory = inputs / "podvm" / tag
         require(hash_file(source_file(directory, "measurements.json")) == entry["measurements_sha256"],
                 f"{tag}: resolution measurement digest mismatch")
-        documents[tag] = verify_podvm(directory, tag, entry["source_revision"], trusted_root)
+        documents[tag] = verify_podvm(directory, tag, entry["source_revision"], trusted_root, legacy_tdx)
     for profile in manifest["profiles"]:
         tags = lock["workloads"][profile["id"]]
         require(tags and len(tags) == len(set(tags)), f"{profile['id']}: empty or duplicate resolution")
@@ -606,8 +636,14 @@ def check_succession(previous, release, revoked):
         require(not dropped, f"revocations from {previous['version']} were dropped: {sorted(dropped)}")
 
 
-def catalog(inputs, release, previous=None, trusted_root=None):
+def catalog(inputs, release, previous=None, trusted_root=None, document=None):
     manifest, lock, documents = read_snapshot(inputs, trusted_root)
+    catalog_schema = snapshot_catalog_schema(inputs)
+    if document is not None:
+        # read_snapshot has authenticated the frozen inventory before selecting
+        # the historical profile from its exact trusted schema bytes.
+        check_schema(document, catalog_schema)
+    legacy_tdx = catalog_schema == "legacy/measurements-v1.schema.json"
     revoked = load_revoked(inputs)
     check_succession(previous, release, revoked)
     workloads = {}
@@ -619,7 +655,12 @@ def catalog(inputs, release, previous=None, trusted_root=None):
                           key=lambda tag: (stable_version(tag).precedence_key, tag)):
             selected = documents[tag]["profiles"][profile["podvm"]["profile"]]
             entry = releases.setdefault(tag, {})
-            if tdx_records(selected):
+            if legacy_tdx:
+                if "tdx" in selected:
+                    measurement = selected["tdx"]["measurement"]
+                    entry["tdx"] = {key: measurement[key]
+                                    for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}
+            elif tdx_records(selected):
                 entry["tdx"] = {processor: {key: record["measurement"][key]
                                             for key in ("mr_td", "rtmr_0", "rtmr_1", "rtmr_2")}
                                 for processor, record in sorted(tdx_records(selected).items())}
@@ -640,7 +681,7 @@ def catalog(inputs, release, previous=None, trusted_root=None):
     }
     result["release"]["previous"] = previous_link(previous)
     result["revoked"] = revoked
-    check_schema(result, "measurements.schema.json")
+    check_schema(result, catalog_schema)
     return result
 
 
@@ -812,7 +853,8 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
     require("SHA256SUMS" not in names, "legacy Trustbase release format is unsupported")
     raw_catalog = source_file(dist, "measurements.json").read_bytes()
     result = load_json(raw_catalog)
-    check_schema(result, "measurements.schema.json")
+    require(isinstance(result, dict), "Trustbase catalog root must be an object")
+    require(isinstance(result.get("release"), dict), "Trustbase release metadata must be an object")
     require(not require_workloads or result["workloads"],
             "publication requires at least one production workload")
     release = release_metadata(**{
@@ -848,7 +890,7 @@ def verify_package(dist, trusted_root=None, require_workloads=False, require_pro
             if max_age is not None:
                 require(age <= max_age,
                         f"release signing event is {int(age)} s old, above the maximum {int(max_age)} s")
-        expected = catalog(inputs, release, previous, trusted_root)
+        expected = catalog(inputs, release, previous, trusted_root, document=result)
         require(json_bytes(expected) == raw_catalog, "catalog differs from frozen inputs")
         require(sha256(archive_bytes(inputs)) == hash_file(dist / archive),
                 "input archive is not reproducibly packaged")
