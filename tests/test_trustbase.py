@@ -460,6 +460,24 @@ class ResolutionTests(Workspace):
         self.assertEqual(selected["model-router"], ["v0.3.13", "v0.3.14"])
         self.assertEqual(selected["example-model"], selected["model-router"])
 
+    def test_policy_gpu_devices_match_the_podvm_profile(self):
+        qwen = "qwen38-27b-h100-pcie-1-96g"
+        source = next(p["initdata"] for p in t.validate(t.ROOT)["profiles"] if p["id"] == qwen)
+        shutil.rmtree(self.root / "init-data")
+        t.write_file(self.root, source, (t.ROOT / source).read_bytes())
+
+        def register(profile):
+            (self.root / "measurements.yaml").write_bytes(t.json_bytes({"schema_version": 1, "profiles": [
+                {"id": qwen, "initdata": source, "podvm": {"profile": profile, "version": "0.3.13"}}]}))
+            shutil.rmtree(self.base / "inputs", ignore_errors=True)
+            return self.snapshot()
+
+        register("h100-pcie-1-96g")
+        for profile, count in (("h100-hgx-8-768g", 8), ("2vcpu-8g", 0)):
+            with self.subTest(profile=profile), self.assertRaisesRegex(
+                    t.Error, f"policy declares 1 GPU device.*profile {profile} has {count}"):
+                register(profile)
+
     def test_semver_syntax(self):
         cases = {"0.3.13": ["0.3.13"], "~0.3.13": ["0.3.13", "0.3.17"],
                  "^0.3.13": ["0.3.13", "0.3.17"], ">=0.3.13 <0.4.0": ["0.3.13", "0.3.17"]}

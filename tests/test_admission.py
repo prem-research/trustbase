@@ -104,6 +104,22 @@ class StaticCheckTests(unittest.TestCase):
         self.assertEqual(report["rules_sha256"], POLICY.rules_sha256)
         self.assertFalse(report["evaluated"])
 
+    def test_declared_gpu_devices(self):
+        vllm = next(i for i, c in enumerate(POLICY.policy_data["containers"]) if a.container_name(c) == "vllm")
+        attestation = next(i for i, c in enumerate(POLICY.policy_data["containers"])
+                           if a.container_name(c) == "attestation")
+        self.assertEqual(a.declared_gpu_devices(RAW), 1)
+        second = with_policy_data(lambda pd: pd["containers"][vllm]["devices"].append(
+            pd["containers"][vllm]["devices"][0]))
+        self.assertEqual(a.declared_gpu_devices(second), 2)
+        shared = with_policy_data(lambda pd: pd["containers"][attestation].update(
+            devices=list(pd["containers"][vllm]["devices"])))
+        self.assertEqual(a.declared_gpu_devices(shared), 2)
+        self.assertEqual(a.declared_gpu_devices(with_policy_data(
+            lambda pd: pd["containers"][vllm].update(devices=[]))), 0)
+        for path in (t.ROOT / "examples/init-data").glob("*.toml"):
+            self.assertIsNone(a.declared_gpu_devices(path.read_bytes()))
+
     def test_mutations_fail_static_checks(self):
         vllm = next(i for i, c in enumerate(POLICY.policy_data["containers"]) if a.container_name(c) == "vllm")
         attestation = next(i for i, c in enumerate(POLICY.policy_data["containers"])
@@ -130,9 +146,6 @@ class StaticCheckTests(unittest.TestCase):
                 {a.NAME_KEY: "debug"}),
             "privileged with another image": lambda pd: pd["containers"][attestation]["OCI"]["Annotations"].update(
                 {a.IMAGE_KEY: "docker.io/vllm/vllm-openai@sha256:" + "1" * 64}),
-            "second gpu": lambda pd: pd["containers"][vllm]["devices"].append(pd["containers"][vllm]["devices"][0]),
-            "gpu on attestation": lambda pd: pd["containers"][attestation].update(
-                devices=list(pd["containers"][vllm]["devices"])),
             "kvm bind": lambda pd: pd["containers"][vllm]["OCI"]["Mounts"].append(
                 {"destination": "/dev/kvm", "source": "/dev/kvm", "type_": "bind", "options": ["rbind", "rw"]}),
             "extra device bind on attestation": lambda pd: pd["containers"][attestation]["OCI"]["Mounts"].append(

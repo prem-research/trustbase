@@ -330,6 +330,14 @@ def static_checks(doc, policy, config):
     return findings
 
 
+def declared_gpu_devices(raw):
+    """GPU devices a generated policy declares; None for a policy without policy_data."""
+    rego = tomllib.loads(raw.decode("utf-8")).get("data", {}).get("policy.rego", "")
+    if not re.search(r"^[ \t]*policy_data\b", rego, re.M):
+        return None
+    return sum(len(c.get("devices", [])) for c in split_policy(rego).policy_data.get("containers", []))
+
+
 def static_checks_deny_all(policy, config):
     findings = []
     if policy.defaults != config["defaults"]:
