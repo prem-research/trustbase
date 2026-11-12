@@ -613,6 +613,7 @@ def read_snapshot(inputs, trusted_root=None):
             require(spec.match(stable_version(tag)), f"{profile['id']}: locked tag {tag} is outside constraint")
             require(profile["podvm"]["profile"] in documents[tag]["profiles"],
                     f"{profile['id']}: {tag} lacks selected profile")
+            check_gpu_devices(inputs, profile, documents[tag]["profiles"][profile["podvm"]["profile"]], tag)
     return manifest, lock, documents
 
 
