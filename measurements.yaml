@@ -10,3 +10,8 @@ profiles:
   podvm:
     profile: h100-pcie-1-96g
     version: 0.3.18
+- id: dsv41-flash-b200-hgx-8-768g
+  initdata: init-data/c12dd6cf25ea0d7d3ca84c6018b9c0227e628f58cccd5aeadbd35c09375fb4cd.toml
+  podvm:
+    profile: b200-hgx-8-768g
+    version: 0.3.19
