@@ -437,7 +437,7 @@ def container_request(pd, index, ids, config, vfio_mode="hot"):
         if vfio_mode == "hot":
             devices.append({"id": f"vfio{number}", "type_": device["type_"], "vm_path": device["vm_path"],
                             "container_path": f"{vfio_path}{number}",
-                            "options": [f"0000:{number + 1:02x}:00.0=0{number + 3}/02"]})
+                            "options": [f"0000:{number + 1:02x}:00.0={number + 3:02x}/02"]})
 
     image = pd["cluster_config"]["pause_container_image"] if is_sandbox else annotations[IMAGE_KEY]
     storages = [{"driver": "image_guest_pull", "driver_options": [], "source": image, "fstype": "overlay",
@@ -580,7 +580,7 @@ def mutations(request, policy_container, pd, config):
 
     def vfio_device(number):
         return {"id": f"vfio{number}", "type_": "vfio-pci-gk", "vm_path": "",
-                "container_path": f"{vfio_path}{number}", "options": [f"0000:0{number + 1}:00.0=03/02"]}
+                "container_path": f"{vfio_path}{number}", "options": [f"0000:{number + 1:02x}:00.0=03/02"]}
 
     if not is_sandbox:
         # The sandbox image is not policy-enforced: any io.kubernetes.cri.* annotation is accepted
@@ -636,7 +636,9 @@ def mutations(request, policy_container, pd, config):
                 r["devices"].append(vfio_device(0)),
                 r["OCI"]["Process"].update(Env=[v for v in r["OCI"]["Process"]["Env"]
                                                 if not v.startswith("VISIBLE_CDI_DEVICES=")])))
-        variant("more gpus than the pod declares", lambda r: r["devices"].extend([vfio_device(0), vfio_device(1)]))
+        declared = sum(d["container_path"] == vfio_path for c in pd["containers"] for d in c.get("devices", []))
+        variant("more gpus than the pod declares",
+                lambda r: r["devices"].extend(vfio_device(n) for n in range(declared + 1)))
     return result
 
 
