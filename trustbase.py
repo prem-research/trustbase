@@ -505,6 +505,16 @@ def fresh_directory(path):
     return path
 
 
+def check_gpu_devices(root, profile, selected, tag):
+    """A generated policy must declare exactly the PodVM profile's GPUs."""
+    import admission
+    declared = admission.declared_gpu_devices(source_file(root, profile["initdata"]).read_bytes())
+    expected = selected.get("gpu", {}).get("count", 0)
+    require(declared is None or declared == expected,
+            f"{profile['id']}: policy declares {declared} GPU device(s); "
+            f"PodVM {tag} profile {profile['podvm']['profile']} has {expected}")
+
+
 def resolve(root, output, github=None, trusted_root=None):
     manifest = validate(root)
     policies = policy_payloads(ROOT)
@@ -548,6 +558,7 @@ def resolve(root, output, github=None, trusted_root=None):
                     require(profile["podvm"]["profile"] in doc["profiles"],
                             f"{profile['id']}: PodVM {tag} lacks profile "
                             f"{profile['podvm']['profile']}")
+                    check_gpu_devices(root, profile, doc["profiles"][profile["podvm"]["profile"]], tag)
             locked[tag] = {"source_revision": revision,
                            "measurements_sha256": hash_file(staging / "podvm" / tag / "measurements.json")}
         lock = {"schema_version": 1, "repository": PODVM_REPO, "workloads": selections,
@@ -602,6 +613,7 @@ def read_snapshot(inputs, trusted_root=None):
             require(spec.match(stable_version(tag)), f"{profile['id']}: locked tag {tag} is outside constraint")
             require(profile["podvm"]["profile"] in documents[tag]["profiles"],
                     f"{profile['id']}: {tag} lacks selected profile")
+            check_gpu_devices(inputs, profile, documents[tag]["profiles"][profile["podvm"]["profile"]], tag)
     return manifest, lock, documents
 
 

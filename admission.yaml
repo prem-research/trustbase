@@ -165,14 +165,19 @@ floor:
   podvm_selections:
   - profile: h100-pcie-1-96g
     version: "0.3.18"
+  - profile: b200-hgx-8-768g
+    version: "0.3.19"
   namespaces:
   - coco-poc
   pause_image: mcr.microsoft.com/oss/kubernetes/pause:3.6
   image_repositories:
   - docker.io/vllm/vllm-openai
   - ghcr.io/prem-research/reticle
+  - ghcr.io/prem-research/vllm-patches
   privileged_containers:
     attestation: ghcr.io/prem-research/reticle
   device_binds:
   - /dev/sev-guest
-  max_gpu_devices: 1
+  - /dev/tdx_guest
+  # Ceiling only; resolution requires exactly the PodVM profile's GPU count.
+  max_gpu_devices: 8

@@ -10,10 +10,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import admission as a
 import trustbase as t
 
 FIXTURE = Path(__file__).parent / "fixtures" / "podvm-v0.3.13.json"
@@ -253,6 +255,32 @@ class HistoricalReleaseTests(Workspace):
         self.assertEqual(result["release"]["previous"], t.previous_link(previous))
         self.assertGreaterEqual(provenance.call_count, 2)
 
+    def test_frozen_gpu_device_count_is_revalidated(self):
+        inputs = self.base / "gpu-count-mismatch-inputs"
+        t.unpack(self.published / "trustbase-inputs-v1.1.2.tar.gz", inputs)
+        manifest = t.validate(inputs)
+        profile = next(p for p in manifest["profiles"] if p["id"] == "qwen38-27b-h100-pcie-1-96g")
+        initdata_path = inputs / profile["initdata"]
+        original = initdata_path.read_bytes()
+        rego = tomllib.loads(original.decode())["data"]["policy.rego"]
+        policy = a.split_policy(rego)
+        for container in policy.policy_data["containers"]:
+            container["devices"] = []
+        changed_rego = policy.rules + "policy_data := " + json.dumps(policy.policy_data, indent=2) + "\n"
+        changed = original.replace(rego.encode(), changed_rego.encode())
+        self.assertEqual(a.declared_gpu_devices(changed), 0)
+        # Keep the modified real inputs self-consistent, including content-
+        # addressed Init-Data and the frozen inventory, to reach the GPU check.
+        new_name = f"init-data/{t.sha256(changed)}.toml"
+        initdata_path.unlink()
+        (inputs / new_name).write_bytes(changed)
+        profile["initdata"] = new_name
+        (inputs / "measurements.yaml").write_bytes(t.json_bytes(manifest))
+        self.refresh_inventory(inputs)
+        with patch.object(t, "verify_attestation"), self.assertRaisesRegex(
+                t.Error, "policy declares 0 GPU device.*profile h100-pcie-1-96g has 1"):
+            t.read_snapshot(inputs)
+
     def test_malformed_outer_workloads_are_controlled_errors(self):
         catalog = self.published / "measurements.json"
         raw = catalog.read_bytes()
@@ -459,6 +487,24 @@ class ResolutionTests(Workspace):
         selected, _ = t.select_releases(manifest, releases)
         self.assertEqual(selected["model-router"], ["v0.3.13", "v0.3.14"])
         self.assertEqual(selected["example-model"], selected["model-router"])
+
+    def test_policy_gpu_devices_match_the_podvm_profile(self):
+        qwen = "qwen38-27b-h100-pcie-1-96g"
+        source = next(p["initdata"] for p in t.validate(t.ROOT)["profiles"] if p["id"] == qwen)
+        shutil.rmtree(self.root / "init-data")
+        t.write_file(self.root, source, (t.ROOT / source).read_bytes())
+
+        def register(profile):
+            (self.root / "measurements.yaml").write_bytes(t.json_bytes({"schema_version": 1, "profiles": [
+                {"id": qwen, "initdata": source, "podvm": {"profile": profile, "version": "0.3.13"}}]}))
+            shutil.rmtree(self.base / "inputs", ignore_errors=True)
+            return self.snapshot()
+
+        register("h100-pcie-1-96g")
+        for profile, count in (("h100-hgx-8-768g", 8), ("2vcpu-8g", 0)):
+            with self.subTest(profile=profile), self.assertRaisesRegex(
+                    t.Error, f"policy declares 1 GPU device.*profile {profile} has {count}"):
+                register(profile)
 
     def test_semver_syntax(self):
         cases = {"0.3.13": ["0.3.13"], "~0.3.13": ["0.3.13", "0.3.17"],
