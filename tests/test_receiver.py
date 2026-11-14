@@ -140,7 +140,10 @@ class ReceiverTests(unittest.TestCase):
         self.assertFalse((self.root / QWEN_PATH).exists())
         self.assertEqual((self.root / target).read_bytes(), CANDIDATE)
         text = (self.root / "measurements.yaml").read_text()
-        self.assertIn("version: 0.3.18", text)
+        # The import moves one workload; every other registration keeps its exact selection.
+        # Assert that invariant rather than a version literal, which every floor bump moves.
+        self.assertEqual([p for p in manifest["profiles"] if p["id"] != QWEN_ID],
+                         [p for p in self.registered if p["id"] != QWEN_ID])
         self.assertEqual(text.count(f"initdata: {target}"), 1)
         self.assertFalse(receive.import_candidate(self.root, payload(), CANDIDATE))
         with self.assertRaisesRegex(t.Error, "do not match the dispatched SHA-256"):
