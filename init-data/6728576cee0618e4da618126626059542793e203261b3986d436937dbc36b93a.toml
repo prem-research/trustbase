@@ -2101,7 +2101,9 @@ policy_data := {
             "--tool-call-parser",
             "qwen3_coder",
             "--speculative-config",
-            "{\"method\":\"mtp\",\"num_speculative_tokens\":3}"
+            "{\"method\":\"mtp\",\"num_speculative_tokens\":3}",
+            "--allowed-media-domains",
+            "none.invalid"
           ],
           "Env": [
             "PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -2131,7 +2133,9 @@ policy_data := {
             "TRITON_CACHE_DIR=/tmp/triton",
             "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor",
             "NUMBA_CACHE_DIR=/tmp/numba",
-            "HF_HUB_OFFLINE=1"
+            "HF_HUB_OFFLINE=1",
+            "VLLM_NO_USAGE_STATS=1",
+            "VLLM_MEDIA_URL_ALLOW_REDIRECTS=0"
           ],
           "Cwd": "/vllm-workspace",
           "Capabilities": {
