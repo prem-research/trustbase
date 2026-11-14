@@ -2106,7 +2106,9 @@ policy_data := {
             "--tool-call-parser",
             "gemma4",
             "--reasoning-parser",
-            "gemma4"
+            "gemma4",
+            "--allowed-media-domains",
+            "none.invalid"
           ],
           "Env": [
             "PATH=/usr/local/cuda/bin:/usr/local/nvidia/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -2140,6 +2142,8 @@ policy_data := {
             "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor",
             "NUMBA_CACHE_DIR=/tmp/numba",
             "HF_HUB_OFFLINE=1",
+            "VLLM_NO_USAGE_STATS=1",
+            "VLLM_MEDIA_URL_ALLOW_REDIRECTS=0",
             "VLLM_USE_V2_MODEL_RUNNER=1"
           ],
           "Cwd": "/vllm-workspace",
