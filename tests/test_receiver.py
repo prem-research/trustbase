@@ -200,11 +200,29 @@ class ReceiverTests(unittest.TestCase):
                                           static_only=True, evaluator=None, report=None))
 
     def test_next_tag(self):
-        listing = {"tags?per_page=100&page=1": [{"name": n} for n in ("v1.2.3", "v1.10.0", "v2.0.0-rc.1", "dev", "v1.9.9")]}
+        releases = [{"tag_name": n, "draft": False, "prerelease": False}
+                    for n in ("v1.2.3", "v1.10.0", "v2.0.0-rc.1", "v1.9.9")]
+        listing = {"releases?per_page=100&page=1": releases}
         with patch.object(receive, "api", lambda repository, path, token: json.dumps(listing[path]).encode()):
             self.assertEqual(receive.next_tag("prem-research/trustbase", "x"), "v1.10.1")
         with patch.object(receive, "api", lambda repository, path, token: b"[]"):
             self.assertEqual(receive.next_tag("prem-research/trustbase", "x"), "v1.0.0")
+
+    def test_next_tag_ignores_a_stranded_tag_from_a_failed_release(self):
+        # A release that failed after pushing its tag leaves v1.1.4 tagged but unpublished.
+        # The next tag must reuse v1.1.4 rather than step to v1.1.5, which git tag would refuse.
+        releases = [{"tag_name": n, "draft": False, "prerelease": False}
+                    for n in ("v1.1.2", "v1.1.3")]
+        tags = [{"name": n} for n in ("v1.1.2", "v1.1.3", "v1.1.4")]
+
+        def api(repository, path, token):
+            if path.startswith("releases"):
+                return json.dumps(releases).encode()
+            return json.dumps(tags).encode()
+
+        with patch.object(receive, "api", api):
+            self.assertEqual(receive.next_tag("prem-research/trustbase", "x"), "v1.1.4")
+            self.assertEqual(receive.latest_published_tag("prem-research/trustbase", "x"), "v1.1.3")
 
     def test_publish_waits_for_previous_release_without_skipping_tags(self):
         output = Path(self.temporary.name) / "out"

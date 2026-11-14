@@ -128,17 +128,16 @@ def run(command, **kwargs):
 
 
 def next_tag(repository, token):
-    tags = []
-    for page in range(1, 101):
-        batch = t.load_json(api(repository, f"tags?per_page=100&page={page}", token))
-        tags += [item["name"] for item in batch if STABLE_TAG.fullmatch(item["name"])]
-        if len(batch) < 100:
-            break
-    else:
-        raise t.Error("tag pagination limit exceeded")
-    if not tags:
+    """The next stable tag, derived from published releases rather than from tags.
+
+    A release workflow can fail after its tag is pushed but before the release is
+    published, stranding that tag. Deriving from tags would then step past the
+    unreleased version and collide with the stranded tag, so the version is taken
+    from the last published release, which is also what await_predecessor expects.
+    """
+    latest = latest_published_tag(repository, token)
+    if latest is None:
         return "v1.0.0"
-    latest = max(tags, key=lambda name: t.Version(name[1:]))
     version = t.Version(latest[1:])
     return f"v{version.major}.{version.minor}.{version.patch + 1}"
 
@@ -171,6 +170,9 @@ def await_predecessor(timeout=2700, interval=15):
             version = t.Version(latest[1:])
             expected = f"v{version.major}.{version.minor}.{version.patch + 1}"
         if expected == prepared["tag"]:
+            # The predecessor is public, so this tag must still be the one to create.
+            # Compare against tags here: a stranded tag on the same commit would make
+            # publishing fail, and that has to be reported rather than retried.
             t.require(next_tag(repository, os.environ["GH_TOKEN"]) == prepared["tag"],
                       "a different stable tag was created while admission waited")
             return
