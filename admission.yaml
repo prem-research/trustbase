@@ -164,7 +164,7 @@ floor:
   # Each pair is reviewed before Fleet may register a workload on that PodVM.
   podvm_selections:
   - profile: h100-pcie-1-96g
-    version: "0.3.18"
+    version: "0.3.20"
   - profile: b200-hgx-8-768g
     version: "0.3.19"
   namespaces:
