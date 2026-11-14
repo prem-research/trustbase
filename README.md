@@ -166,6 +166,17 @@ so a change to Rego logic needs a reviewed Trustbase pull request while
 headers, the request defaults, and a floor over the sandbox, containers, images,
 capabilities, devices, mounts, and storage records against the accepted values.
 
+A container's capability sets are checked as sets, because genpolicy writes the
+`$(default_caps)` or `$(privileged_caps)` macro only when `securityContext` asks
+for the defaults or for privileged, and the expanded list when it asks for a
+subset. Each set must stay within the container's ceiling, `default_caps` or, for
+a container declared in `floor.privileged_containers`, `privileged_caps`; a
+subset is therefore less privilege than the macro it narrows. `Ambient` and
+`Inheritable` must be empty unless the container is the declared privileged one,
+and the five fields must describe a triple the kernel accepts: `Effective` and
+`Ambient` within `Permitted`, and `Permitted` and `Inheritable` within
+`Bounding`.
+
 The behavioral half replays agent requests through `tools/kata-policy-eval`, a
 small Rust binary that links the kata-agent's own policy and protocol crates at
 the PodVM's Kata revision, so policies are evaluated by the same regorus build
