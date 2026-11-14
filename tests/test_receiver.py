@@ -30,6 +30,14 @@ CONFIG = admission.load_config(t.ROOT)
 NEW_ID = "new-model-h100-pcie-1-96g"
 NEW_CANDIDATE = CANDIDATE.replace(f'"id" = "{QWEN_ID}"'.encode(),
                                   f'"id" = "{NEW_ID}"'.encode(), 1)
+# The reviewed floor the suite runs against, read from admission.yaml rather than from the
+# registered workloads: those only catch up to a reviewed floor change when Fleet re-targets
+# them, so a floor bump would otherwise break this suite before any candidate arrives.
+H100_FLOOR = next(dict(selection) for selection in CONFIG["floor"]["podvm_selections"]
+                  if selection["profile"] == "h100-pcie-1-96g")
+# A floor version this suite never allows, to prove the gate refuses what is not reviewed.
+UNREVIEWED_VERSION = next(v for v in ("0.3.18", "0.3.19", "0.3.20", "0.3.21")
+                          if {"profile": "h100-pcie-1-96g", "version": v} != H100_FLOOR)
 
 
 def profile(profiles, ident):
@@ -40,7 +48,7 @@ def profile(profiles, ident):
 def payload(**overrides):
     base = {"schema_version": 1, "workload": QWEN_ID, "repository": "prem-research/coco-fleet",
             "commit": "c" * 40, "path": f"candidates/{t.sha256(CANDIDATE)}.toml",
-            "sha256": t.sha256(CANDIDATE), "podvm": {"profile": "h100-pcie-1-96g", "version": "0.3.18"}}
+            "sha256": t.sha256(CANDIDATE), "podvm": dict(H100_FLOOR)}
     base.update(overrides)
     return base
 
@@ -102,8 +110,8 @@ class ReceiverTests(unittest.TestCase):
             ({"repository": "someone/else"}, "not prem-research/coco-fleet"),
             ({"path": "other/" + t.sha256(CANDIDATE) + ".toml"}, "candidates/<sha256>.toml"),
             ({"path": "candidates/" + "0" * 64 + ".toml"}, "candidates/<sha256>.toml"),
-            ({"podvm": {"profile": "h100-pcie-1-96g", "version": "0.3.19"}}, "reviewed admission floor"),
-            ({"podvm": {"profile": "other", "version": "0.3.18"}}, "reviewed admission floor"),
+            ({"podvm": {"profile": "h100-pcie-1-96g", "version": UNREVIEWED_VERSION}}, "reviewed admission floor"),
+            ({"podvm": {"profile": "other", "version": H100_FLOOR["version"]}}, "reviewed admission floor"),
         ):
             with self.subTest(change=change), self.assertRaisesRegex(t.Error, message):
                 receive.validate_payload(payload(**change), CONFIG, manifest)
@@ -141,8 +149,10 @@ class ReceiverTests(unittest.TestCase):
     def test_import_refuses_revoked_and_wrong_workload_identity(self):
         (self.root / "revoked.yaml").write_text(
             f"schema_version: 1\nentries:\n  - id: {QWEN_ID}\n    sha256: '{t.sha256(CANDIDATE)}'\n    reason: test\n")
+        # The exact committed bytes: an unreviewed selection must not answer for them first.
+        committed = next(p["podvm"] for p in self.registered if p["id"] == QWEN_ID)
         with self.assertRaisesRegex(t.Error, "revoked"):
-            receive.import_candidate(self.root, payload(), CANDIDATE)
+            receive.import_candidate(self.root, payload(podvm=committed), CANDIDATE)
         (self.root / "revoked.yaml").write_text("schema_version: 1\nentries: []\n")
         with self.assertRaisesRegex(t.Error, "data.id must exactly match"):
             receive.import_candidate(self.root, payload(workload="other"), CANDIDATE)
@@ -159,7 +169,7 @@ class ReceiverTests(unittest.TestCase):
             "podvm": new_payload["podvm"]})
         self.assertFalse(receive.import_candidate(self.root, new_payload, NEW_CANDIDATE))
 
-        updated_selection = {"profile": "h100-pcie-1-96g", "version": "0.3.19"}
+        updated_selection = {"profile": "h100-pcie-1-96g", "version": UNREVIEWED_VERSION}
         changed = payload(workload=NEW_ID, sha256=t.sha256(NEW_CANDIDATE),
                           path=new_payload["path"], podvm=updated_selection)
         with self.assertRaisesRegex(t.Error, "reviewed admission floor"):
@@ -171,7 +181,7 @@ class ReceiverTests(unittest.TestCase):
 
     def test_release_admission_rejects_registration_outside_podvm_floor(self):
         manifest = t.validate(self.root)
-        manifest["profiles"][0]["podvm"]["version"] = "0.3.19"
+        manifest["profiles"][0]["podvm"]["version"] = UNREVIEWED_VERSION
         (self.root / "measurements.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
         args = SimpleNamespace(root=self.root, config=None, all=True, ids=[],
                                static_only=True, evaluator=None, report=None)
@@ -271,9 +281,17 @@ class ReceiverTests(unittest.TestCase):
 
     def test_main_already_imported_is_a_noop(self):
         committed = (t.ROOT / QWEN_PATH).read_bytes()
+        # The no-op is a dispatch repeating the registration it already produced, so first
+        # reach that state through the real import path; then the same dispatch changes nothing.
+        registered = next((p["podvm"] for p in self.registered if p["id"] == QWEN_ID), H100_FLOOR)
+        if registered not in CONFIG["floor"]["podvm_selections"]:
+            registered = H100_FLOOR
+            self.assertTrue(receive.import_candidate(
+                self.root, payload(podvm=registered, path=f"candidates/{t.sha256(committed)}.toml",
+                                   sha256=t.sha256(committed)), committed))
         env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_SHA": "a" * 40,
                "GITHUB_EVENT_PATH": str(self.event(path=f"candidates/{t.sha256(committed)}.toml",
-                                                   sha256=t.sha256(committed))),
+                                                   sha256=t.sha256(committed), podvm=registered)),
                "FLEET_TOKEN": "fleet", "RELEASE_TOKEN": "release"}
         output = Path(self.temporary.name) / "out"
         with patch.dict(os.environ, env, clear=True), patch.object(receive, "api", FakeFleet(content=committed)), \

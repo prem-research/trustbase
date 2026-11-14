@@ -90,11 +90,13 @@ def import_candidate(root, payload, raw):
     """Place the TOML and create or update its registration within the reviewed floor."""
     root = Path(root)
     ident, digest = payload["workload"], payload["sha256"]
+    # Revocation is permanent for those exact bytes, so answer it first: a floor change or a
+    # malformed payload must never replace "revoked" with an unrelated selection error.
+    t.require(digest not in {entry["sha256"] for entry in t.load_revoked(root)}, "candidate is revoked")
     manifest = t.validate(root)
     profile = validate_payload(payload, admission.load_config(root), manifest)
     t.require(t.sha256(raw) == digest, "candidate bytes do not match the dispatched SHA-256")
     t.initdata(raw, ident)
-    t.require(digest not in {entry["sha256"] for entry in t.load_revoked(root)}, "candidate is revoked")
     target = f"init-data/{digest}.toml"
     path = root / target
     if path.exists() or path.is_symlink():
