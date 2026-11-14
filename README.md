@@ -194,6 +194,11 @@ python trustbase.py admit <workload-id> --report build/admission.json
 
 `--static-only` skips the replay for local iteration; CI never passes it.
 
+A reviewed floor change lands before Fleet re-dispatches the workloads it retargets.
+Until those dispatches arrive, `admit --all` gates the workloads inside the floor,
+prints each registration it holds back, and keeps them out of the next release;
+naming such a workload explicitly is still an error.
+
 ### Revocation
 
 `revoked.yaml` is a cumulative list of Init-Data digests that relying parties must

@@ -183,10 +183,18 @@ class ReceiverTests(unittest.TestCase):
         manifest = t.validate(self.root)
         manifest["profiles"][0]["podvm"]["version"] = UNREVIEWED_VERSION
         (self.root / "measurements.yaml").write_text(yaml.safe_dump(manifest, sort_keys=False))
-        args = SimpleNamespace(root=self.root, config=None, all=True, ids=[],
-                               static_only=True, evaluator=None, report=None)
+        outside = manifest["profiles"][0]["id"]
+        # A floor change lands before Fleet re-dispatches: --all gates the reviewed workloads
+        # and holds the rest back, but a workload named on the command line is still refused.
+        reports = admission.cli(SimpleNamespace(root=self.root, config=None, all=True, ids=[],
+                                                static_only=True, evaluator=None, report=None))
+        admitted = {report["workload"] for report in reports}
+        self.assertNotIn(outside, admitted)
+        self.assertEqual(admitted, {p["id"] for p in manifest["profiles"]
+                                    if p["podvm"] in CONFIG["floor"]["podvm_selections"]})
         with self.assertRaisesRegex(t.Error, "reviewed admission floor"):
-            admission.cli(args)
+            admission.cli(SimpleNamespace(root=self.root, config=None, all=False, ids=[outside],
+                                          static_only=True, evaluator=None, report=None))
 
     def test_next_tag(self):
         listing = {"tags?per_page=100&page=1": [{"name": n} for n in ("v1.2.3", "v1.10.0", "v2.0.0-rc.1", "dev", "v1.9.9")]}

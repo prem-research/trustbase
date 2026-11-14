@@ -822,15 +822,25 @@ def cli(args):
               f"unknown workload(s): {sorted(set(args.ids) - {p['id'] for p in selected})}")
     t.require(selected, "no workloads selected")
     evaluator = None if args.static_only else KataPolicyEvaluator(args.evaluator)
-    reports = []
+    # A reviewed floor change lands before Fleet re-dispatches the workloads it retargets, so
+    # `--all` gates the workloads that are inside the floor and holds the rest back until their
+    # next dispatch. Naming a workload explicitly still requires it to be in the floor.
+    reports, outside_floor = [], []
     for profile in selected:
-        if config["policy"] == "genpolicy":
-            t.require(profile["podvm"] in config["floor"]["podvm_selections"],
-                      f"{profile['id']}: PodVM selection is not in the reviewed admission floor")
+        if config["policy"] == "genpolicy" and profile["podvm"] not in config["floor"]["podvm_selections"]:
+            t.require(args.all, f"{profile['id']}: PodVM selection is not in the reviewed admission floor")
+            outside_floor.append(f"{profile['id']} ({profile['podvm']['profile']} "
+                                 f"{profile['podvm']['version']})")
+            print(f"Held back {profile['id']}: PodVM selection is not in the reviewed admission floor")
+            continue
         raw = t.source_file(root, profile["initdata"]).read_bytes()
         reports.append(admit(raw, profile["id"], config, evaluator, args.static_only))
         print(f"Admitted {profile['id']} ({profile['initdata']})"
               + (" [static checks only]" if args.static_only else ""))
+    if outside_floor:
+        t.require(reports, "no registered workload is inside the reviewed admission floor")
+        print("Outside the reviewed admission floor, awaiting their fleet dispatch: "
+              + ", ".join(outside_floor))
     if args.report:
         t.require(not Path(args.report).exists(), f"output already exists: {args.report}")
         Path(args.report).write_bytes(t.json_bytes(reports))
