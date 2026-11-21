@@ -189,6 +189,58 @@ class StaticCheckTests(unittest.TestCase):
             with self.subTest(label=label), self.assertRaisesRegex(t.Error, "static checks failed"):
                 a.admit(raw, QWEN_ID, CONFIG, static_only=True)
 
+    def test_capability_sets_are_checked_as_sets(self):
+        """genpolicy expands a subset into literals, so capability sets are compared as sets."""
+        vllm = next(i for i, c in enumerate(POLICY.policy_data["containers"]) if a.container_name(c) == "vllm")
+        attestation = next(i for i, c in enumerate(POLICY.policy_data["containers"])
+                           if a.container_name(c) == "attestation")
+        default_caps = POLICY.policy_data["common"]["default_caps"]
+        privileged_caps = POLICY.policy_data["common"]["privileged_caps"]
+        without_net_raw = [c for c in default_caps if c != "CAP_NET_RAW"]
+
+        def caps(pd, index, **fields):
+            pd["containers"][index]["OCI"]["Process"]["Capabilities"] = {
+                "Ambient": [], "Bounding": [], "Effective": [], "Inheritable": [], "Permitted": [],
+                **fields}
+
+        def admitted(edit):
+            a.admit(with_policy_data(edit), QWEN_ID, CONFIG, static_only=True)
+
+        # A narrowed subset of the ceiling is less privilege than the default macro.
+        admitted(lambda pd: caps(pd, vllm, Bounding=without_net_raw, Effective=without_net_raw,
+                                 Permitted=without_net_raw))
+        # The declared privileged container may narrow to the exact capabilities it needs.
+        admitted(lambda pd: caps(pd, attestation, Bounding=privileged_caps, Effective=privileged_caps,
+                                 Permitted=privileged_caps))
+
+        for label, edit in {
+            "subset above the default ceiling": lambda pd: caps(
+                pd, vllm, Bounding=default_caps + ["CAP_SYS_ADMIN"],
+                Effective=default_caps + ["CAP_SYS_ADMIN"], Permitted=default_caps + ["CAP_SYS_ADMIN"]),
+            "privileged caps outside the declaration": lambda pd: caps(
+                pd, vllm, Bounding=privileged_caps, Effective=privileged_caps, Permitted=privileged_caps),
+            "ambient capabilities": lambda pd: caps(
+                pd, vllm, Ambient=without_net_raw, Bounding=without_net_raw,
+                Effective=without_net_raw, Permitted=without_net_raw),
+            "inheritable capabilities": lambda pd: caps(
+                pd, vllm, Bounding=without_net_raw, Effective=without_net_raw,
+                Permitted=without_net_raw, Inheritable=without_net_raw),
+            "effective outside permitted": lambda pd: caps(
+                pd, vllm, Bounding=without_net_raw, Effective=without_net_raw,
+                Permitted=without_net_raw[1:]),
+            "permitted outside bounding": lambda pd: caps(
+                pd, vllm, Bounding=without_net_raw[1:], Effective=without_net_raw[1:],
+                Permitted=without_net_raw),
+            "repeated name": lambda pd: caps(
+                pd, vllm, Bounding=without_net_raw, Effective=without_net_raw,
+                Permitted=without_net_raw + without_net_raw[:1]),
+            "macro mixed with literals": lambda pd: caps(
+                pd, vllm, Bounding=["$(default_caps)", "CAP_CHOWN"], Effective=["CAP_CHOWN"],
+                Permitted=["CAP_CHOWN"]),
+        }.items():
+            with self.subTest(label=label), self.assertRaisesRegex(t.Error, "static checks failed"):
+                a.admit(with_policy_data(edit), QWEN_ID, CONFIG, static_only=True)
+
     def test_sample_pattern(self):
         for pattern in ("^vllm-qwen38-27b-[bcdfghjklmnpqrstvwxz2456789]+-[bcdfghjklmnpqrstvwxz2456789]+$",
                         "^[a-z0-9]{64}$", "^web-[a-z]+$", "^plain$", "^a\\.b$", "^x[0-9]?$"):

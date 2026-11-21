@@ -293,13 +293,12 @@ def static_checks(doc, policy, config):
                 if repository not in floor["image_repositories"]:
                     note(f"{prefix} image repository {repository} is not allowed")
         caps = oci["Process"].get("Capabilities") or {}
-        privileged = False
-        for field in ("Ambient", "Bounding", "Effective", "Inheritable", "Permitted"):
-            value = caps.get(field)
-            if value not in ([], ["$(default_caps)"], ["$(privileged_caps)"]):
-                note(f"{prefix} capability set {field} must be empty, default, or privileged: {value}")
-            privileged = privileged or value == ["$(privileged_caps)"]
-        if privileged and floor["privileged_containers"].get(name) != repository:
+        declared_privileged = repository is not None and floor["privileged_containers"].get(name) == repository
+        cap_notes, resolved = cap_findings(caps, expected, declared_privileged, prefix)
+        findings.extend(cap_notes)
+        # Privilege is what the container can actually reach: any field beyond the default ceiling.
+        privileged = any(names - set(expected["default_caps"]) for names in resolved.values())
+        if privileged and not declared_privileged:
             note(f"{prefix} requests privileged capabilities but is not the declared "
                  f"privileged container for repository {repository}")
         if oci["Linux"].get("Devices") != []:
@@ -392,12 +391,63 @@ def substitute(value, ids):
     return value
 
 
+CAP_FIELDS = ("Ambient", "Bounding", "Effective", "Inheritable", "Permitted")
+CAP_MACROS = {"$(default_caps)": "default_caps", "$(privileged_caps)": "privileged_caps"}
+
+
 def expand_caps(values, common):
     if values == ["$(default_caps)"]:
         return list(common["default_caps"])
     if values == ["$(privileged_caps)"]:
         return list(common["privileged_caps"])
     return list(values)
+
+
+def cap_findings(caps, expected, declared_privileged, prefix):
+    """Check one container's capability sets against the reviewed ceilings.
+
+    genpolicy writes a macro when securityContext asks for the defaults or for privileged, and
+    the expanded list when it asks for a subset, so a capability set is checked as a set: it must
+    be within the container's ceiling, and the five fields must describe one OCI capability triple
+    the kernel would accept (Effective <= Permitted <= Bounding, Ambient <= Permitted).
+    """
+    findings = []
+    ceilings = {"default_caps": set(expected["default_caps"]),
+                "privileged_caps": set(expected["privileged_caps"])}
+    resolved = {}
+    for field in CAP_FIELDS:
+        value = caps.get(field)
+        if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+            findings.append(f"{prefix} capability set {field} is not a list of names: {value!r}")
+            continue
+        macros = [c for c in value if c in CAP_MACROS]
+        if macros:
+            if len(value) != 1:
+                findings.append(f"{prefix} capability set {field} mixes a macro with literals: {value}")
+            else:
+                resolved[field] = set(ceilings[CAP_MACROS[value[0]]])
+            continue
+        if len(set(value)) != len(value):
+            findings.append(f"{prefix} capability set {field} repeats a name: {value}")
+        resolved[field] = set(value)
+    ceiling = ceilings["privileged_caps" if declared_privileged else "default_caps"]
+    for field, names in resolved.items():
+        outside = names - ceiling
+        if outside:
+            findings.append(f"{prefix} capability set {field} exceeds the "
+                            f"{'privileged' if declared_privileged else 'default'} ceiling: {sorted(outside)}")
+    # Ambient and Inheritable survive execve, so they stay empty unless the container is the
+    # declared privileged one; the kernel rejects Ambient outside Permitted anyway.
+    for field in ("Ambient", "Inheritable"):
+        if resolved.get(field) and not declared_privileged:
+            findings.append(f"{prefix} capability set {field} must be empty: {sorted(resolved[field])}")
+    order = (("Effective", "Permitted"), ("Permitted", "Bounding"), ("Ambient", "Permitted"),
+             ("Inheritable", "Bounding"))
+    for inner, outer in order:
+        if inner in resolved and outer in resolved and not resolved[inner] <= resolved[outer]:
+            findings.append(f"{prefix} capability set {inner} is not within {outer}: "
+                            f"{sorted(resolved[inner] - resolved[outer])}")
+    return findings, resolved
 
 
 def container_request(pd, index, ids, config, vfio_mode="hot"):
@@ -562,7 +612,7 @@ def mutations(request, policy_container, pd, config):
     vfio_path = config["policy_data"]["vfio_device_path"]
     annotations = request["OCI"]["Annotations"]
     is_sandbox = annotations.get(TYPE_KEY) == "sandbox"
-    privileged = request["OCI"]["Process"]["Capabilities"]["Bounding"] == list(common["privileged_caps"])
+    privileged = bool(set(request["OCI"]["Process"]["Capabilities"]["Bounding"]) - set(common["default_caps"]))
     has_gpu = any(d["container_path"] == vfio_path for d in policy_container.get("devices", []))
     result = []
 
