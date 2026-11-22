@@ -2136,6 +2136,8 @@ policy_data := {
             "VLLM_IMAGE_TAG=vllm/vllm-openai:v0.30.0",
             "PATCH_NIGHTLY_AS=",
             "HOSTNAME=$(host-name)",
+            "NCCL_SOCKET_IFNAME=lo",
+            "GLOO_SOCKET_IFNAME=lo",
             "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True",
             "VLLM_ALLREDUCE_USE_SYMM_MEM=0",
             "VLLM_ALLREDUCE_USE_FLASHINFER=0",
@@ -2150,14 +2152,50 @@ policy_data := {
           "Capabilities": {
             "Ambient": [],
             "Bounding": [
-              "$(default_caps)"
+              "CAP_CHOWN",
+              "CAP_DAC_OVERRIDE",
+              "CAP_FSETID",
+              "CAP_FOWNER",
+              "CAP_MKNOD",
+              "CAP_SETGID",
+              "CAP_SETUID",
+              "CAP_SETFCAP",
+              "CAP_SETPCAP",
+              "CAP_NET_BIND_SERVICE",
+              "CAP_SYS_CHROOT",
+              "CAP_KILL",
+              "CAP_AUDIT_WRITE"
             ],
             "Effective": [
-              "$(default_caps)"
+              "CAP_CHOWN",
+              "CAP_DAC_OVERRIDE",
+              "CAP_FSETID",
+              "CAP_FOWNER",
+              "CAP_MKNOD",
+              "CAP_SETGID",
+              "CAP_SETUID",
+              "CAP_SETFCAP",
+              "CAP_SETPCAP",
+              "CAP_NET_BIND_SERVICE",
+              "CAP_SYS_CHROOT",
+              "CAP_KILL",
+              "CAP_AUDIT_WRITE"
             ],
             "Inheritable": [],
             "Permitted": [
-              "$(default_caps)"
+              "CAP_CHOWN",
+              "CAP_DAC_OVERRIDE",
+              "CAP_FSETID",
+              "CAP_FOWNER",
+              "CAP_MKNOD",
+              "CAP_SETGID",
+              "CAP_SETUID",
+              "CAP_SETFCAP",
+              "CAP_SETPCAP",
+              "CAP_NET_BIND_SERVICE",
+              "CAP_SYS_CHROOT",
+              "CAP_KILL",
+              "CAP_AUDIT_WRITE"
             ]
           },
           "NoNewPrivileges": false
@@ -3066,4 +3104,29 @@ location = "ghcr.io"
 [[image.registry_config.registry.mirror]]
 location = "registry-mirror.coco-system.svc.cluster.local:5000"
 insecure = true
+'''
+"network-policy.json" = '''
+{
+  "version": 1,
+  "containers": {
+    "vllm": {
+      "mode": "loopback-only",
+      "service_ports": [
+        "8001/tcp"
+      ]
+    },
+    "attestation": {
+      "mode": "egress-allowlist",
+      "service_ports": [
+        "8081/tcp"
+      ],
+      "dns_allow": [
+        "nras.attestation.nvidia.com"
+      ],
+      "port_allow": [
+        "443/tcp"
+      ]
+    }
+  }
+}
 '''
