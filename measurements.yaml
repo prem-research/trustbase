@@ -1,10 +1,10 @@
 schema_version: 1
 profiles:
 - id: qwen38-27b-h100-pcie-1-96g
-  initdata: init-data/6728576cee0618e4da618126626059542793e203261b3986d436937dbc36b93a.toml
+  initdata: init-data/c96a24d47f5b08c19ba787bda7429597b7c339e253795d37b35b7005bd42fbbc.toml
   podvm:
     profile: h100-pcie-1-96g
-    version: 0.3.20
+    version: 0.3.21
 - id: diffusiongemma-26b-a4b-h100-pcie-1-96g
   initdata: init-data/f29e5efc44f0eba4aea06bb602f821c4e9234c011ec050429cedf00a15e20f83.toml
   podvm:
