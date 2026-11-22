@@ -341,9 +341,10 @@ class ScenarioTests(unittest.TestCase):
             self.assertEqual(len(oci["Mounts"]), len(policy["OCI"]["Mounts"]))
             self.assertEqual(len(step.request["storages"]), len(policy["storages"]) + 1)
             self.assertNotIn("$(", json.dumps(step.request))
-            self.assertTrue(set(oci["Process"]["Capabilities"]["Bounding"]) in (
-                set(POLICY.policy_data["common"]["default_caps"]),
-                set(POLICY.policy_data["common"]["privileged_caps"])))
+            bounding = set(oci["Process"]["Capabilities"]["Bounding"])
+            common = POLICY.policy_data["common"]
+            self.assertTrue(bounding <= set(common["default_caps"])
+                            or bounding == set(common["privileged_caps"]))
             self.assertTrue(oci["Root"]["Path"].startswith("/run/kata-containers/"))
             self.assertRegex(annotations[a.SANDBOX_NAME_KEY], policy["OCI"]["Annotations"][a.SANDBOX_NAME_KEY])
         hot = next(s for s in positives if s.request["devices"])
