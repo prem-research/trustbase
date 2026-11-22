@@ -204,10 +204,11 @@ def previous_release(root):
     return values.get("previous") or None
 
 
-def publish(root, repository, token, tag, message):
+def publish(root, repository, token, app_slug, tag, message):
     auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    bot = f"{app_slug}[bot]"
     git = ["git", "-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {auth}",
-           "-c", "user.name=trustbase-bot", "-c", "user.email=trustbase-bot@users.noreply.github.com"]
+           "-c", f"user.name={bot}", "-c", f"user.email={bot}@users.noreply.github.com"]
     subprocess.run(git + ["add", "-A", "--", "init-data", "measurements.yaml"], check=True, cwd=root)
     subprocess.run(git + ["commit", "-q", "-m", message], check=True, cwd=root)
     subprocess.run(git + ["tag", tag], check=True, cwd=root)
@@ -261,7 +262,7 @@ def publish_prepared():
     t.require(os.environ["GITHUB_REPOSITORY"] == prepared["repository"] and
               os.environ["GITHUB_SHA"] == prepared["source_sha"],
               "prepared change belongs to a different repository revision")
-    publish(ROOT, prepared["repository"], os.environ["RELEASE_TOKEN"],
+    publish(ROOT, prepared["repository"], os.environ["RELEASE_TOKEN"], os.environ["RELEASE_APP_SLUG"],
             prepared["tag"], prepared["message"])
 
 

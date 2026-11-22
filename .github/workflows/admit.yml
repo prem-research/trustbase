@@ -152,4 +152,5 @@ jobs:
       - name: Commit and tag the admitted candidate
         env:
           RELEASE_TOKEN: ${{ steps.release.outputs.token }}
+          RELEASE_APP_SLUG: ${{ steps.release.outputs.app-slug }}
         run: python .github/scripts/receive.py publish-prepared

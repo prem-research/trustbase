@@ -295,7 +295,8 @@ class ReceiverTests(unittest.TestCase):
                             path=f"candidates/{t.sha256(NEW_CANDIDATE)}.toml")
         env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_SHA": "a" * 40,
                "GITHUB_EVENT_PATH": str(self.event(workload=NEW_ID, sha256=candidate["sha256"],
-                                                        path=candidate["path"])), "RELEASE_TOKEN": "release"}
+                                                        path=candidate["path"])), "RELEASE_TOKEN": "release",
+               "RELEASE_APP_SLUG": "trustbase-release"}
         with patch.dict(os.environ, env, clear=True), patch.object(receive, "OUTPUT", output):
             receive.import_candidate(self.root, candidate, NEW_CANDIDATE)
             receive.prepared_change(self.root, candidate, env["GITHUB_REPOSITORY"], "v1.0.1", "import candidate")
@@ -306,7 +307,8 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(t.sha256((checkout / "init-data" / (candidate["sha256"] + ".toml")).read_bytes()),
                          candidate["sha256"])
         self.assertEqual(t.validate(checkout)["profiles"][-1]["id"], NEW_ID)
-        self.assertEqual(publish.call_args.args[1:4], ("prem-research/trustbase", "release", "v1.0.1"))
+        self.assertEqual(publish.call_args.args[1:5],
+                         ("prem-research/trustbase", "release", "trustbase-release", "v1.0.1"))
 
     def test_main_already_imported_is_a_noop(self):
         committed = (t.ROOT / QWEN_PATH).read_bytes()
@@ -333,8 +335,10 @@ class ReceiverTests(unittest.TestCase):
 
     def test_publish_uses_an_atomic_push_with_a_header_credential(self):
         with patch.object(receive.subprocess, "run") as run:
-            receive.publish(self.root, "prem-research/trustbase", "secret", "v1.0.1", "msg")
+            receive.publish(self.root, "prem-research/trustbase", "secret", "trustbase-release", "v1.0.1", "msg")
         commands = [call.args[0] for call in run.call_args_list]
+        self.assertIn("user.name=trustbase-release[bot]", commands[-1])
+        self.assertIn("user.email=trustbase-release[bot]@users.noreply.github.com", commands[-1])
         self.assertEqual([c[c.index("-c") - 1] if False else c[-3:] for c in commands][-1],
                          ["https://github.com/prem-research/trustbase", "HEAD:refs/heads/main", "refs/tags/v1.0.1"])
         self.assertIn("--atomic", commands[-1])
