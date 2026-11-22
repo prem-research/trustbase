@@ -2137,6 +2137,8 @@ policy_data := {
             "VLLM_BUILD_URL=https://buildkite.com/vllm/release-v2/builds/10425",
             "VLLM_IMAGE_TAG=vllm/vllm-openai:cu134-nightly-96710245ece8fe57a0df3ea18cdc79cbb8ce93cf",
             "HOSTNAME=$(host-name)",
+            "NCCL_SOCKET_IFNAME=lo",
+            "GLOO_SOCKET_IFNAME=lo",
             "PYTORCH_ALLOC_CONF=expandable_segments:True",
             "TRITON_CACHE_DIR=/tmp/triton",
             "TORCHINDUCTOR_CACHE_DIR=/tmp/torchinductor",
@@ -2150,14 +2152,50 @@ policy_data := {
           "Capabilities": {
             "Ambient": [],
             "Bounding": [
-              "$(default_caps)"
+              "CAP_CHOWN",
+              "CAP_DAC_OVERRIDE",
+              "CAP_FSETID",
+              "CAP_FOWNER",
+              "CAP_MKNOD",
+              "CAP_SETGID",
+              "CAP_SETUID",
+              "CAP_SETFCAP",
+              "CAP_SETPCAP",
+              "CAP_NET_BIND_SERVICE",
+              "CAP_SYS_CHROOT",
+              "CAP_KILL",
+              "CAP_AUDIT_WRITE"
             ],
             "Effective": [
-              "$(default_caps)"
+              "CAP_CHOWN",
+              "CAP_DAC_OVERRIDE",
+              "CAP_FSETID",
+              "CAP_FOWNER",
+              "CAP_MKNOD",
+              "CAP_SETGID",
+              "CAP_SETUID",
+              "CAP_SETFCAP",
+              "CAP_SETPCAP",
+              "CAP_NET_BIND_SERVICE",
+              "CAP_SYS_CHROOT",
+              "CAP_KILL",
+              "CAP_AUDIT_WRITE"
             ],
             "Inheritable": [],
             "Permitted": [
-              "$(default_caps)"
+              "CAP_CHOWN",
+              "CAP_DAC_OVERRIDE",
+              "CAP_FSETID",
+              "CAP_FOWNER",
+              "CAP_MKNOD",
+              "CAP_SETGID",
+              "CAP_SETUID",
+              "CAP_SETFCAP",
+              "CAP_SETPCAP",
+              "CAP_NET_BIND_SERVICE",
+              "CAP_SYS_CHROOT",
+              "CAP_KILL",
+              "CAP_AUDIT_WRITE"
             ]
           },
           "NoNewPrivileges": false
@@ -2916,4 +2954,29 @@ policy_data := {
     "info": "c1df0ce28b49d4f4835197ebc75d0d9600a80cbff296d0db5a59dd630b3a2bab_27235086336_8b487241-b5de-57a8-b4c3-031a0e8bae3d"
   }
 ]
+'''
+"network-policy.json" = '''
+{
+  "version": 1,
+  "containers": {
+    "vllm": {
+      "mode": "loopback-only",
+      "service_ports": [
+        "8000/tcp"
+      ]
+    },
+    "attestation": {
+      "mode": "egress-allowlist",
+      "service_ports": [
+        "8081/tcp"
+      ],
+      "dns_allow": [
+        "nras.attestation.nvidia.com"
+      ],
+      "port_allow": [
+        "443/tcp"
+      ]
+    }
+  }
+}
 '''
