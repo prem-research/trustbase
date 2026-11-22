@@ -46,17 +46,24 @@ def profile(profiles, ident):
 
 
 def payload(**overrides):
-    base = {"schema_version": 1, "workload": QWEN_ID, "repository": "prem-research/coco-fleet",
+    base = {"workload": QWEN_ID, "repository": "prem-research/coco-fleet",
             "commit": "c" * 40, "path": f"candidates/{t.sha256(CANDIDATE)}.toml",
             "sha256": t.sha256(CANDIDATE), "podvm": dict(H100_FLOOR)}
     base.update(overrides)
     return base
 
 
+def dispatch(*candidates):
+    """The schema v2 client_payload naming these candidates from one fleet commit."""
+    return {"schema_version": 2, "repository": candidates[0]["repository"], "commit": candidates[0]["commit"],
+            "candidates": [{key: c[key] for key in ("workload", "path", "sha256", "podvm")} for c in candidates]}
+
+
 class FakeFleet:
-    def __init__(self, status="ahead", content=CANDIDATE):
+    def __init__(self, status="ahead", content=CANDIDATE, contents=None):
         self.status = status
         self.content = content
+        self.contents = contents or {}
         self.calls = []
 
     def __call__(self, repository, path, token, accept="application/vnd.github+json"):
@@ -65,7 +72,7 @@ class FakeFleet:
             return json.dumps({"status": self.status}).encode()
         if path.startswith("contents/"):
             assert accept == "application/vnd.github.raw+json" and "?ref=" + "c" * 40 in path
-            return self.content
+            return self.contents.get(path.split("?")[0].removeprefix("contents/"), self.content)
         raise AssertionError(path)
 
 
@@ -81,8 +88,12 @@ class ReceiverTests(unittest.TestCase):
         self.registered = t.validate(self.root)["profiles"]
 
     def event(self, **overrides):
+        return self.event_for(payload(**overrides))
+
+    def event_for(self, *candidates, client_payload=None):
         path = Path(self.temporary.name) / "event.json"
-        path.write_bytes(t.json_bytes({"action": "init-data-candidate", "client_payload": payload(**overrides)}))
+        path.write_bytes(t.json_bytes({"action": "init-data-candidate",
+                                       "client_payload": client_payload or dispatch(*candidates)}))
         return path
 
     def allow_selection(self, selection):
@@ -91,16 +102,25 @@ class ReceiverTests(unittest.TestCase):
         (self.root / "admission.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
 
     def test_payload_schema_and_event_type(self):
-        self.assertEqual(receive.payload_from_event(self.event()), payload())
+        new = payload(workload=NEW_ID, sha256=t.sha256(NEW_CANDIDATE),
+                      path=f"candidates/{t.sha256(NEW_CANDIDATE)}.toml")
+        self.assertEqual(receive.candidates_from_event(self.event()), [payload()])
+        self.assertEqual(receive.candidates_from_event(self.event_for(payload(), new)), [payload(), new])
         path = Path(self.temporary.name) / "event.json"
-        path.write_bytes(t.json_bytes({"action": "other", "client_payload": payload()}))
+        path.write_bytes(t.json_bytes({"action": "other", "client_payload": dispatch(payload())}))
         with self.assertRaisesRegex(t.Error, "event type"):
-            receive.payload_from_event(path)
-        for change in ({"commit": "abc"}, {"sha256": "0" * 63}, {"path": "../x.toml"}, {"extra": 1},
-                       {"workload": "Bad Id"}, {"schema_version": 2}, {"podvm": {"profile": "x"}}):
-            path.write_bytes(t.json_bytes({"action": "init-data-candidate", "client_payload": payload(**change)}))
-            with self.subTest(change=change), self.assertRaises(t.Error):
-                receive.payload_from_event(path)
+            receive.candidates_from_event(path)
+        base = dispatch(payload())
+        invalid = [{**base, **change} for change in (
+            {"commit": "abc"}, {"extra": 1}, {"schema_version": 1}, {"candidates": []})]
+        invalid += [{**base, "candidates": [{**base["candidates"][0], **change}]} for change in (
+            {"sha256": "0" * 63}, {"path": "../x.toml"}, {"extra": 1}, {"workload": "Bad Id"},
+            {"podvm": {"profile": "x"}}, {"repository": "prem-research/coco-fleet"})]
+        for client_payload in invalid:
+            with self.subTest(client_payload=client_payload), self.assertRaises(t.Error):
+                receive.candidates_from_event(self.event_for(client_payload=client_payload))
+        with self.assertRaisesRegex(t.Error, "more than once"):
+            receive.candidates_from_event(self.event_for(payload(), payload()))
 
     def test_payload_must_match_source_and_reviewed_podvm_floor(self):
         manifest = t.validate(t.ROOT)
@@ -249,6 +269,8 @@ class ReceiverTests(unittest.TestCase):
                 patch.object(receive, "ROOT", self.root), patch.object(receive, "OUTPUT", output), \
                 patch.object(admission, "KataPolicyEvaluator", lambda *a: None), \
                 patch.object(admission, "admit", return_value={"ok": True}) as gate, \
+                patch.object(receive, "head_revision", return_value="b" * 40), \
+                patch.object(receive, "await_tag_releases") as wait, \
                 patch.object(receive, "next_tag", return_value="v1.0.1") as next_tag, \
                 patch.object(receive, "candidate_release") as release, \
                 patch.object(receive, "previous_release", return_value="build/previous"), \
@@ -258,15 +280,75 @@ class ReceiverTests(unittest.TestCase):
                 stdout=b"candidate patch" if command[:3] == ["git", "diff", "--cached"] else " M measurements.yaml\n")
             receive.main()
         self.assertEqual(gate.call_args.args[:2], (CANDIDATE, QWEN_ID))
+        self.assertEqual(wait.call_args.args, ("prem-research/trustbase", "read-only"))
         self.assertEqual(next_tag.call_args.args, ("prem-research/trustbase", "read-only"))
-        self.assertEqual(release.call_args.args[1:], ("v1.0.1", "a" * 40, "build/previous"))
+        # The release is built from the checked-out main, not from the event's github.sha.
+        self.assertEqual(release.call_args.args[1:], ("v1.0.1", "b" * 40, "build/previous"))
         self.assertFalse(push.called)
         self.assertIn("would publish v1.0.1", (output / "status.txt").read_text())
         self.assertEqual((output / "changes.patch").read_bytes(), b"candidate patch")
-        self.assertEqual(t.load_json((output / "prepared.json").read_bytes())["sha256"], t.sha256(CANDIDATE))
+        prepared = t.load_json((output / "prepared.json").read_bytes())
+        self.assertEqual(prepared["candidates"], [{"workload": QWEN_ID, "sha256": t.sha256(CANDIDATE)}])
+        self.assertEqual(prepared["source_sha"], "b" * 40)
         self.assertTrue((output / "admission-report.json").exists())
         self.assertEqual(profile(t.validate(self.root)["profiles"], QWEN_ID)["initdata"],
                          f"init-data/{t.sha256(CANDIDATE)}.toml")
+
+    def test_main_imports_every_dispatched_candidate_under_one_tag(self):
+        new = payload(workload=NEW_ID, sha256=t.sha256(NEW_CANDIDATE),
+                      path=f"candidates/{t.sha256(NEW_CANDIDATE)}.toml")
+        env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_SHA": "a" * 40,
+               "GITHUB_EVENT_PATH": str(self.event_for(payload(), new)), "FLEET_TOKEN": "fleet",
+               "GH_TOKEN": "read-only"}
+        output = Path(self.temporary.name) / "out"
+        fleet = FakeFleet(contents={new["path"]: NEW_CANDIDATE})
+        with patch.dict(os.environ, env, clear=True), patch.object(receive, "api", fleet), \
+                patch.object(receive, "ROOT", self.root), patch.object(receive, "OUTPUT", output), \
+                patch.object(admission, "KataPolicyEvaluator", lambda *a: None), \
+                patch.object(admission, "admit", return_value={"ok": True}) as gate, \
+                patch.object(receive, "head_revision", return_value="b" * 40), \
+                patch.object(receive, "await_tag_releases"), \
+                patch.object(receive, "next_tag", return_value="v1.0.1"), \
+                patch.object(receive, "candidate_release") as release, \
+                patch.object(receive, "previous_release", return_value=None), \
+                patch.object(receive.subprocess, "run") as run:
+            run.side_effect = lambda command, **kwargs: SimpleNamespace(
+                stdout=b"candidate patch" if command[:3] == ["git", "diff", "--cached"] else "")
+            receive.main()
+        self.assertEqual([c.args[:2] for c in gate.call_args_list],
+                         [(CANDIDATE, QWEN_ID), (NEW_CANDIDATE, NEW_ID)])
+        self.assertEqual(release.call_count, 1)
+        prepared = t.load_json((output / "prepared.json").read_bytes())
+        self.assertEqual([c["workload"] for c in prepared["candidates"]], [QWEN_ID, NEW_ID])
+        self.assertEqual(prepared["message"].splitlines()[0], f"Import 2 candidates from prem-research/coco-fleet@{'c' * 40}")
+        self.assertEqual(len(t.load_json((output / "admission-report.json").read_bytes())), 2)
+        profiles = t.validate(self.root)["profiles"]
+        self.assertEqual(profile(profiles, QWEN_ID)["initdata"], f"init-data/{t.sha256(CANDIDATE)}.toml")
+        self.assertEqual(profile(profiles, NEW_ID)["initdata"], f"init-data/{t.sha256(NEW_CANDIDATE)}.toml")
+
+    def test_prepare_waits_for_the_newest_tag_to_be_released(self):
+        state = {"tags": ["v1.0.0", "v1.0.1"], "released": ["v1.0.0"]}
+
+        def api(repository, path, token):
+            return json.dumps([{"tag_name": n, "draft": False, "prerelease": False}
+                               for n in state["released"]]).encode()
+
+        def ls_remote(command, **kwargs):
+            self.assertNotIn("secret", " ".join(part for part in command if part.startswith("https://")))
+            refs = [f"{'0' * 40}\trefs/tags/{n}" for n in state["tags"] + ["v2.0.0-rc.1", "other"]]
+            return SimpleNamespace(stdout="\n".join(refs) + "\n")
+
+        def release(_):
+            state["released"].append("v1.0.1")
+
+        with patch.object(receive, "api", api), patch.object(receive.subprocess, "run", ls_remote), \
+                patch.object(receive.time, "sleep", side_effect=release) as sleep:
+            receive.await_tag_releases("prem-research/trustbase", "secret", timeout=60)
+        sleep.assert_called_once_with(15)
+        state["tags"].append("v1.0.2")
+        with patch.object(receive, "api", api), patch.object(receive.subprocess, "run", ls_remote):
+            with self.assertRaisesRegex(t.Error, "v1.0.2 has no published release"):
+                receive.await_tag_releases("prem-research/trustbase", "secret", timeout=0)
 
     def test_denied_candidate_never_prepares_a_publishable_change(self):
         env = {"GITHUB_REPOSITORY": "prem-research/trustbase", "GITHUB_SHA": "a" * 40,
@@ -299,7 +381,8 @@ class ReceiverTests(unittest.TestCase):
                "RELEASE_APP_SLUG": "trustbase-release"}
         with patch.dict(os.environ, env, clear=True), patch.object(receive, "OUTPUT", output):
             receive.import_candidate(self.root, candidate, NEW_CANDIDATE)
-            receive.prepared_change(self.root, candidate, env["GITHUB_REPOSITORY"], "v1.0.1", "import candidate")
+            receive.prepared_change(self.root, [candidate], env["GITHUB_REPOSITORY"],
+                                    receive.head_revision(self.root), "v1.0.1", "import candidate")
             with patch.object(receive, "ROOT", checkout):
                 receive.apply_prepared()
                 with patch.object(receive, "publish") as publish:

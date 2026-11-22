@@ -1,10 +1,11 @@
 name: Admit Init-Data candidate
 
-# Fleet merges send `repository_dispatch` events of type `init-data-candidate` naming a candidate
-# TOML committed on fleet main. This workflow always runs the code on Trustbase's default branch,
-# fetches the exact candidate, runs the admission gate, and packages the would-be release. When
-# every check passes, a separate job applies the validated change and pushes the import commit
-# plus the next vX.Y.Z tag through the release bot App; a failed check publishes nothing.
+# Each fleet merge sends one `repository_dispatch` event of type `init-data-candidate` naming the
+# candidate TOMLs it committed on fleet main. This workflow always runs the code on Trustbase's
+# default branch, fetches the exact candidates, runs the admission gate on each, and packages the
+# would-be release. When every check passes, a separate job applies the validated change and pushes
+# one import commit plus the next vX.Y.Z tag through the release bot App; a failed check publishes
+# nothing.
 
 on:
   repository_dispatch:
@@ -29,6 +30,7 @@ jobs:
     timeout-minutes: 40
     outputs:
       changed: ${{ steps.receive.outputs.changed }}
+      source_sha: ${{ steps.receive.outputs.source_sha }}
     steps:
       - name: Install checkout dependencies
         run: |
@@ -38,6 +40,7 @@ jobs:
           "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl gcc git libc6-dev make tar
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -122,7 +125,7 @@ jobs:
           "${elevate[@]}" env DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends ca-certificates coreutils curl git make tar
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ needs.prepare.outputs.source_sha }}
           persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
