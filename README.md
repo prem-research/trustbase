@@ -121,12 +121,13 @@ effect in the next release; relying parties choose which release they trust.
 
 ## Candidate submission and admission
 
-The fleet repository commits each generated Init-Data candidate and sends a
-`repository_dispatch` to this repository naming the source commit, path, digest,
-workload, and intended PodVM profile and version. The dispatch is one-way and
+The fleet repository commits each generated Init-Data candidate and, per merge,
+sends one `repository_dispatch` to this repository naming the source commit and,
+for each changed workload, the path, digest, workload, and intended
+PodVM profile and version. The dispatch is one-way and
 proves only delivery. The receiver (`.github/workflows/admit.yml`,
 `.github/scripts/receive.py`) always runs from this repository's default branch,
-validates the payload against `schemas/dispatch.schema.json`, requires the selected
+validates the payload against `schemas/dispatch.schema.json`, requires each selected
 PodVM profile and exact version to be listed in the reviewed `admission.yaml`
 floor, confirms the commit belongs to the fleet default branch, fetches the file
 at exactly that commit, and requires the
@@ -146,10 +147,13 @@ The pipeline is the dry run: the prepare job resolves, packages, and verifies th
 would-be release and uploads it with the admission report as a workflow
 artifact. Only when every check passed, and only for events sent by the
 configured fleet dispatcher, does a separate publish job commit the import and
-push it together with the next `vX.Y.Z` tag in one atomic push, after the
-preceding tag has a published release. The tag push starts the ordinary release
-workflow, which reruns every check before signing. A failed check publishes
-nothing.
+push it together with the next `vX.Y.Z` tag in one atomic push. All candidates
+in a dispatch share that commit and tag, and if any of them fails, none is
+published. Dispatches run one at a time; each run checks out `main` as it is when
+the run starts, not as it was when the event was sent, and derives its tag only
+after the preceding tag has a published release, so a queued run builds on the
+import before it. The tag push starts the ordinary release workflow, which reruns
+every check before signing. A failed check publishes nothing.
 
 ### What the gate checks
 
@@ -189,8 +193,8 @@ can compare them with the guest's policy log.
 The gate does not prove that the real runtime emits exactly these requests. An
 acceptance run on hardware remains the authority for the deployed path.
 
-For each changed fleet candidate that passes the gate, the receiver writes
-`build/admission/admission-report.json`. It records the workload and exact TOML
+For each dispatch that passes the gate, the receiver writes
+`build/admission/admission-report.json`, with one entry per imported candidate. Each entry records the workload and exact TOML
 digest, approved rules digest, and each replayed request with its expected and
 observed verdict. The admission workflow uploads it as a 30-day Actions artifact.
 

@@ -1,11 +1,12 @@
-"""Receive a fleet dispatch, prepare its candidate, then publish in a separate job.
+"""Receive a fleet dispatch, prepare its candidates, then publish in a separate job.
 
-The event payload only names a candidate: the fleet repository, a commit on its main branch,
-the path `candidates/<sha256>.toml`, and the SHA-256 of the exact TOML bytes. Nothing in the
-payload is trusted; this script fetches the bytes at that exact commit with a read-only token,
-checks their digest and identity, imports them as `init-data/<sha256>.toml`, runs the admission
-gate, and packages a candidate release. The separate publish job applies the prepared patch
-and pushes the import commit and next `vX.Y.Z` tag atomically with the release bot's token.
+The event payload only names candidates: the fleet repository, a commit on its main branch,
+and for each workload the path `candidates/<sha256>.toml` and the SHA-256 of the exact TOML
+bytes. Nothing in the payload is trusted; this script fetches the bytes at that exact commit
+with a read-only token, checks their digest and identity, imports them as
+`init-data/<sha256>.toml`, runs the admission gate on each, and packages one candidate release.
+The separate publish job applies the prepared patch and pushes the import commit and next
+`vX.Y.Z` tag atomically with the release bot's token. Every candidate is admitted or none is.
 """
 import base64
 import http.client
@@ -52,13 +53,17 @@ def api(repository, path, token, accept="application/vnd.github+json"):
     return raw
 
 
-def payload_from_event(path):
+def candidates_from_event(path):
+    """The dispatched candidates, each carrying the shared fleet repository and commit."""
     event = t.load_json(Path(path).read_bytes())
     t.require(event.get("action") == EVENT_TYPE, f"unexpected dispatch event type: {event.get('action')!r}")
     payload = event.get("client_payload")
     t.require(isinstance(payload, dict), "dispatch carries no client_payload object")
     t.check_schema(payload, "dispatch.schema.json")
-    return payload
+    workloads = [c["workload"] for c in payload["candidates"]]
+    t.require(len(set(workloads)) == len(workloads), "dispatch names a workload more than once")
+    return [{**c, "repository": payload["repository"], "commit": payload["commit"]}
+            for c in payload["candidates"]]
 
 
 def validate_payload(payload, config, manifest):
@@ -127,6 +132,12 @@ def run(command, **kwargs):
     return subprocess.run(command, check=True, **kwargs)
 
 
+def head_revision(root):
+    """The checked-out commit, which a queued run takes from main rather than from the event."""
+    return subprocess.run(["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True,
+                          cwd=root).stdout.strip()
+
+
 def next_tag(repository, token):
     """The next stable tag, derived from published releases rather than from tags.
 
@@ -154,6 +165,34 @@ def latest_published_tag(repository, token):
         if len(batch) < 100:
             return max(tags, key=lambda name: t.Version(name[1:])) if tags else None
     raise t.Error("GitHub release pagination limit exceeded")
+
+
+def latest_tag(repository, token):
+    """The highest stable tag, whether or not its release was published."""
+    auth = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    refs = subprocess.run(["git", "-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {auth}",
+                           "ls-remote", "--tags", "--refs", f"https://github.com/{repository}"],
+                          check=True, capture_output=True, text=True).stdout
+    tags = [line.split("refs/tags/", 1)[1] for line in refs.splitlines() if "\trefs/tags/" in line]
+    tags = [tag for tag in tags if STABLE_TAG.fullmatch(tag)]
+    return max(tags, key=lambda name: t.Version(name[1:])) if tags else None
+
+
+def await_tag_releases(repository, token, timeout=1200, interval=15):
+    """Wait until the newest tag has a published release before deriving the next one.
+
+    The previous run pushes its tag and then hands over to the release workflow; deriving the
+    next tag before that release is public would pick the same tag again.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        tag, released = latest_tag(repository, token), latest_published_tag(repository, token)
+        if tag is None or (released is not None and t.Version(tag[1:]) <= t.Version(released[1:])):
+            return
+        t.require(time.monotonic() < deadline,
+                  f"tag {tag} has no published release; if its release workflow failed, "
+                  "delete the tag and dispatch again")
+        time.sleep(interval)
 
 
 def await_predecessor(timeout=2700, interval=15):
@@ -217,7 +256,17 @@ def publish(root, repository, token, app_slug, tag, message):
                           f"refs/tags/{tag}"], check=True, cwd=root)
 
 
-def prepared_change(root, payload, repository, tag, message):
+def import_message(imported):
+    """One subject line for a single import; a subject plus one line per workload for several."""
+    first = imported[0]
+    source = f"{first['repository']}@{first['commit']}"
+    if len(imported) == 1:
+        return f"Import {first['workload']} candidate {first['sha256'][:12]} from {source}"
+    return "\n".join([f"Import {len(imported)} candidates from {source}", ""] +
+                     [f"- {c['workload']} candidate {c['sha256'][:12]}" for c in imported])
+
+
+def prepared_change(root, imported, repository, source_sha, tag, message):
     """Save the validated change for a separate, write-capable publish job."""
     run(["git", "add", "-A", "--", "init-data", "measurements.yaml"], cwd=root)
     patch = subprocess.run(["git", "diff", "--cached", "--binary", "HEAD", "--",
@@ -226,20 +275,20 @@ def prepared_change(root, payload, repository, tag, message):
     t.require(patch, "candidate import produced no commit patch")
     (OUTPUT / "changes.patch").write_bytes(patch)
     (OUTPUT / "prepared.json").write_bytes(t.json_bytes({
-        "repository": repository, "source_sha": os.environ["GITHUB_SHA"],
-        "sha256": payload["sha256"], "workload": payload["workload"],
+        "repository": repository, "source_sha": source_sha,
+        "candidates": [{"workload": c["workload"], "sha256": c["sha256"]} for c in imported],
         "tag": tag, "message": message, "patch_sha256": t.sha256(patch),
     }))
 
 
 def apply_prepared():
     """Apply only the change produced by this run's read-only preparation job."""
-    payload = payload_from_event(os.environ["GITHUB_EVENT_PATH"])
+    candidates = {c["workload"]: c for c in candidates_from_event(os.environ["GITHUB_EVENT_PATH"])}
     prepared = t.load_json((OUTPUT / "prepared.json").read_bytes())
     t.require(prepared["repository"] == os.environ["GITHUB_REPOSITORY"] and
-              prepared["source_sha"] == os.environ["GITHUB_SHA"] and
-              prepared["sha256"] == payload["sha256"] and
-              prepared["workload"] == payload["workload"],
+              prepared["source_sha"] == head_revision(ROOT) and prepared["candidates"] and
+              all(c["workload"] in candidates and candidates[c["workload"]]["sha256"] == c["sha256"]
+                  for c in prepared["candidates"]),
               "prepared change does not match this dispatch and source revision")
     t.require(STABLE_TAG.fullmatch(prepared["tag"]), "invalid prepared release tag")
     patch = OUTPUT / "changes.patch"
@@ -248,19 +297,22 @@ def apply_prepared():
     run(["git", "apply", "--check", str(patch)], cwd=ROOT)
     run(["git", "apply", str(patch)], cwd=ROOT)
     manifest = t.validate(ROOT)
-    profile = next((p for p in manifest["profiles"] if p["id"] == payload["workload"]), None)
-    t.require(profile is not None and profile["initdata"] == f"init-data/{payload['sha256']}.toml"
-              and profile["podvm"] == payload["podvm"],
-              "prepared import does not register the dispatched candidate")
-    validate_payload(payload, admission.load_config(ROOT), manifest)
-    t.require(t.sha256((ROOT / profile["initdata"]).read_bytes()) == payload["sha256"],
-              "prepared candidate bytes do not match the dispatch")
+    config = admission.load_config(ROOT)
+    for workload in (c["workload"] for c in prepared["candidates"]):
+        candidate = candidates[workload]
+        profile = next((p for p in manifest["profiles"] if p["id"] == workload), None)
+        t.require(profile is not None and profile["initdata"] == f"init-data/{candidate['sha256']}.toml"
+                  and profile["podvm"] == candidate["podvm"],
+                  f"prepared import does not register the dispatched candidate for {workload}")
+        validate_payload(candidate, config, manifest)
+        t.require(t.sha256((ROOT / profile["initdata"]).read_bytes()) == candidate["sha256"],
+                  f"prepared candidate bytes for {workload} do not match the dispatch")
 
 
 def publish_prepared():
     prepared = t.load_json((OUTPUT / "prepared.json").read_bytes())
     t.require(os.environ["GITHUB_REPOSITORY"] == prepared["repository"] and
-              os.environ["GITHUB_SHA"] == prepared["source_sha"],
+              head_revision(ROOT) == prepared["source_sha"],
               "prepared change belongs to a different repository revision")
     publish(ROOT, prepared["repository"], os.environ["RELEASE_TOKEN"], os.environ["RELEASE_APP_SLUG"],
             prepared["tag"], prepared["message"])
@@ -269,36 +321,41 @@ def publish_prepared():
 def main():
     root = ROOT
     repository = os.environ["GITHUB_REPOSITORY"]
-    payload = payload_from_event(os.environ["GITHUB_EVENT_PATH"])
+    candidates = candidates_from_event(os.environ["GITHUB_EVENT_PATH"])
     config = admission.load_config(root)
-    validate_payload(payload, config, t.validate(root))
-    raw = fetch_candidate(payload, config, os.environ["FLEET_TOKEN"])
-    t.initdata(raw, payload["workload"])
+    manifest = t.validate(root)
+    for candidate in candidates:
+        validate_payload(candidate, config, manifest)
+    raws = [fetch_candidate(candidate, config, os.environ["FLEET_TOKEN"]) for candidate in candidates]
+    for candidate, raw in zip(candidates, raws):
+        t.initdata(raw, candidate["workload"])
     t.require(not OUTPUT.exists(), f"{OUTPUT} already exists")
     OUTPUT.mkdir(parents=True)
-    imported = import_candidate(root, payload, raw)
+    imported = [(c, raw) for c, raw in zip(candidates, raws) if import_candidate(root, c, raw)]
     if not imported:
-        print(f"Candidate {payload['sha256']} is already the registered Init-Data for {payload['workload']}")
+        print("Every dispatched candidate is already the registered Init-Data for its workload")
         (OUTPUT / "status.txt").write_text("already-imported\n")
         if os.environ.get("GITHUB_OUTPUT"):
             with open(os.environ["GITHUB_OUTPUT"], "a") as output:
                 output.write("changed=false\n")
         return
-    report = admission.admit(raw, payload["workload"], config, admission.KataPolicyEvaluator())
-    (OUTPUT / "admission-report.json").write_bytes(t.json_bytes(report))
+    evaluator = admission.KataPolicyEvaluator()
+    reports = [admission.admit(raw, c["workload"], config, evaluator) for c, raw in imported]
+    (OUTPUT / "admission-report.json").write_bytes(t.json_bytes(reports))
     diff = subprocess.run(["git", "status", "--porcelain=v1", "--", "init-data", "measurements.yaml"],
                           check=True, capture_output=True, text=True, cwd=root).stdout
     (OUTPUT / "changes.txt").write_text(diff)
+    source_sha = head_revision(root)
+    await_tag_releases(repository, os.environ["GH_TOKEN"])
     tag = next_tag(repository, os.environ["GH_TOKEN"])
-    candidate_release(root, tag, os.environ["GITHUB_SHA"], previous_release(root))
-    message = (f"Import {payload['workload']} candidate {payload['sha256'][:12]} "
-               f"from {payload['repository']}@{payload['commit']}")
-    prepared_change(root, payload, repository, tag, message)
+    candidate_release(root, tag, source_sha, previous_release(root))
+    message = import_message([c for c, _ in imported])
+    prepared_change(root, [c for c, _ in imported], repository, source_sha, tag, message)
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-            output.write("changed=true\n")
+            output.write(f"changed=true\nsource_sha={source_sha}\n")
     (OUTPUT / "status.txt").write_text(f"prepared\nwould publish {tag}\n{message}\n")
-    print(f"Prepared: {message}; would publish {tag}")
+    print(f"Prepared: {message.splitlines()[0]}; would publish {tag}")
 
 
 if __name__ == "__main__":

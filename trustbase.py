@@ -482,10 +482,15 @@ def inventory(root):
 
 
 def snapshot_schema_names():
-    """Active schemas copied into new snapshots; legacy rules are verifier-only."""
+    """Active schemas copied into new snapshots; legacy rules are verifier-only.
+
+    The dispatch schema governs only the admission receiver, never release contents, so it is
+    neither frozen nor compared: older snapshots keep the copy they were built with.
+    """
     return sorted(path.relative_to(ROOT).as_posix()
                   for path in (ROOT / "schemas").rglob("*.json")
-                  if "legacy" not in path.relative_to(ROOT / "schemas").parts)
+                  if "legacy" not in path.relative_to(ROOT / "schemas").parts
+                  and path.name != "dispatch.schema.json")
 
 
 def snapshot_catalog_schema(inputs):
